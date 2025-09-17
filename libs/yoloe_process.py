@@ -1,32 +1,44 @@
 from ultralytics import YOLOE
-import preprocess
 import numpy as np
 import cv2
-from typing import List, overload, Iterator
+from typing import List, overload, Iterator, Union
+import os
 
-# Initialize a YOLOE model
-model = YOLOE("./yoloe-11l-seg.pt")  # or select yoloe-11s/m-seg.pt for different sizes
+class Yolo:
+    def __init__(self, model_weight_path:str):
+        try:
+            if not os.path.isfile(model_weight_path):
+                raise FileNotFoundError(f"The YOLOE model weights not found")
+            else:
+                self.model = YOLOE(model_weight_path)
+        except:
+            raise TimeoutError("Model weight not loaded, Something causes an error!")
+        self.prompt_classes = list()
 
-# Set text prompt to detect person and bus. You only need to do this once after you load the model.
-names = ["person", "bus"]
-model.set_classes(names, model.get_text_pe(names))
+    def add_class(self, class_name: str):
+        if class_name not in self.prompt_classes:
+            self.prompt_classes.append(class_name)
+            self.model.set_classes(self.prompt_classes, self.model.get_text_pe(self.prompt_classes))
 
-# Run detection on the given image
-results = model.predict("path/to/image.jpg")
+    def remove_class(self, class_name: str):
+        if class_name in self.prompt_classes:
+            self.prompt_classes.remove(class_name)
+            self.model.set_classes(self.prompt_classes, self.model.get_text_pe(self.prompt_classes))
 
-# Show results
-results[0].show()
+    def get_prompt_classes(self) -> List[str]:
+        return self.prompt_classes.copy()
 
-@overload
-def predict_prompts(prompt_classes: List[str], source: List[np.typing.ArrayLike]):...
+    def set_prompt_classes(self, new_prompt_classes:List[str]):
+        self.prompt_classes = new_prompt_classes
+        self.model.set_classes(self.prompt_classes, self.model.get_text_pe(self.prompt_classes))
 
-@overload
-def predict_prompts(prompt_classes: List[str], source: Iterator[np.typing.ArrayLike]):...
-
-def predict_prompts(prompt_classes: List[str], source) :
-    global model
-    model.set_classes(prompt_classes, model.get_text_pe(prompt_classes))
-
-    for frame in source:
-        result = model.predict(frame)
-        ### continue tthisssssssssss
+    def clear_prompt_classes(self):
+        self.prompt_classes.clear()
+        self.model.set_classes(self.prompt_classes, self.model.get_text_pe(self.prompt_classes))
+        
+    def predict_prompts(self, source:List[np.typing.ArrayLike]) :
+        for frame in source:
+            result = self.model.predict(frame, imgsz=1280)
+            result[0].show()
+            print(result[0].boxes)
+            ### results extract boxes, and 

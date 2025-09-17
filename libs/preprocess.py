@@ -30,6 +30,7 @@ def fps_scale_down(vid_file: cv2.VideoCapture, fps: int, as_itter: bool = False)
     frame_idx = 0
 
     def iterator():
+        ### getting the first outerscope variable with nonlocal
         nonlocal next_keep_ms, dropped, frame_idx
         while True:
             ret, frame = vid_file.read()
