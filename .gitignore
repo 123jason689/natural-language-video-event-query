@@ -209,8 +209,9 @@ __marimo__/
 
 
 # Models and weights
-models/*/*.pt
+# models/*/*
 mobileclip_blt.ts
+models/*/*
 
 #vids and assets
 *.mp4
