@@ -1,6 +1,7 @@
 from typing import Iterator, List, overload, Union, Literal
 import groundingdino.datasets.transforms as T
 import torchvision.transforms.functional as F
+from groundingdino.util.box_ops import box_xyxy_to_cxcywh
 from groundingdino.util.misc import interpolate
 import torch
 import math
@@ -185,18 +186,17 @@ def vid_to_torch_tensor(vid_file: cv2.VideoCapture) -> torch.Tensor:
 
     return frames
 
-def permute_BHWC_to_BCHW(img_tensor:torch.Tensor)->torch.Tensor:
+def permute_THWC_to_TCHW(img_tensor:torch.Tensor)->torch.Tensor:
     return img_tensor.permute(0,3,1,2)
 
 ## input (B,H,W,C)
 def load_frame_formated(frames:torch.Tensor):
     if frames.shape[-1] < frames.shape[1]:
-        frames = permute_BHWC_to_BCHW(frames)
+        frames = permute_THWC_to_TCHW(frames)
     transform = T.Compose(
         [
             Resize_CV2(800, max_size=1333),
-            T.ToTensor(),
-            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]
     )
     frames_transformed, _ = transform(frames, None)
@@ -206,27 +206,14 @@ def load_frame_formated(frames:torch.Tensor):
 # helpers / altered from source code
 class Resize_CV2(object):
     def __init__(self, size, max_size=None):
-        assert isinstance(size, (list, tuple))
         self.size = size
         self.max_size = max_size
 
-    def __call__(self, img, target=None):
-        return self.resize(img, target)
+    def __call__(self, frames, target=None):
+        return self.resize(frames, target)
     
     
-    def resize(self, image, target):
-        '''
-        
-        
-        
-            This Implementation isn't finished, 
-            need to convert the process 
-            from accepting PIL.Image to torch.Tensor
-            with Tensor format (B,C,H,W)
-        
-        
-        
-        '''
+    def resize(self, frames, target):
         # size can be min_size (scalar) or (w, h) tuple
 
         def get_size_with_aspect_ratio(image_size, size, max_size=None):
@@ -255,13 +242,14 @@ class Resize_CV2(object):
             else:
                 return get_size_with_aspect_ratio(image_size, size, max_size)
 
-        size = get_size(image.size, size, self.max_size)
-        rescaled_image = F.resize(image, size)
+        # tensor format (T, C, H, W)
+        size = get_size((frames.shape[2], frames.shape[3]), self.size, self.max_size)
+        rescaled_frames = F.resize(frames, size, antialias=True)
 
         if target is None:
-            return rescaled_image, None
+            return rescaled_frames, None
 
-        ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_image.size, image.size))
+        ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_frames.shape[1:], frames.shape[1:]))
         ratio_width, ratio_height = ratios
 
         target = target.copy()
@@ -285,4 +273,15 @@ class Resize_CV2(object):
                 interpolate(target["masks"][:, None].float(), size, mode="nearest")[:, 0] > 0.5
             )
 
-        return rescaled_image, target
+        return rescaled_frames, target
+    
+class Normalize(object):
+    def __init__(self, mean, std):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, frames, target=None):
+        frames = F.normalize(frames, mean=self.mean, std=self.std)
+        if target is None:
+            return frames, None
+        return frames, target
