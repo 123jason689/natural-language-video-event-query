@@ -17,7 +17,7 @@ cd $SCRIPT_DIR/models/dino/GroundingDINO/
 pip install -e .
 mkdir weights
 cd weights
-wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
+curl -s -L -O https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
 cd $SCRIPT_DIR
 
 

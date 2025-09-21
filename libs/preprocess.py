@@ -1,4 +1,7 @@
 from typing import Iterator, List, overload, Union, Literal
+import kornia as K
+import kornia.filters as KF
+import kornia.enhance as KE
 import groundingdino.datasets.transforms as T
 import torchvision.transforms.functional as F
 from groundingdino.util.box_ops import box_xyxy_to_cxcywh
@@ -33,9 +36,9 @@ def fps_scale_down_to_np_arr(vid_file: cv2.VideoCapture, fps: int, output_type: 
     if fps == 0:
         ret, frame = vid_file.read()
         if not ret:
-            return [] if not as_itter else iter(())
+            return [] if not output_type == 'iter' else iter(())
         arr = np.asarray(frame)
-        if as_itter:
+        if output_type == 'iter':
             def gen_one():
                 yield arr
             return gen_one()
@@ -121,7 +124,6 @@ def fps_scale_down_to_tensor(vid_file: cv2.VideoCapture, fps: int)->torch.Tensor
     print(f"Shrink FPS from {vid_fps} FPS to {len(frames)} frames while dropping {dropped} frames")
     return frames
 
-
 def vid_to_np_arr(vid_file: cv2.VideoCapture) -> np.typing.NDArray[np.uint8]:
     """
     Load all frames from a video file.
@@ -190,7 +192,8 @@ def permute_THWC_to_TCHW(img_tensor:torch.Tensor)->torch.Tensor:
     return img_tensor.permute(0,3,1,2)
 
 ## input (B,H,W,C)
-def load_frame_formated(frames:torch.Tensor):
+@torch.inference_mode()
+def load_frame_formated(frames:torch.Tensor)->torch.Tensor:
     if frames.shape[-1] < frames.shape[1]:
         frames = permute_THWC_to_TCHW(frames)
     transform = T.Compose(
@@ -202,7 +205,6 @@ def load_frame_formated(frames:torch.Tensor):
     frames_transformed, _ = transform(frames, None)
     return frames_transformed
 
-
 # helpers / altered from source code
 class Resize_CV2(object):
     def __init__(self, size, max_size=None):
@@ -211,7 +213,6 @@ class Resize_CV2(object):
 
     def __call__(self, frames, target=None):
         return self.resize(frames, target)
-    
     
     def resize(self, frames, target):
         # size can be min_size (scalar) or (w, h) tuple
@@ -246,34 +247,7 @@ class Resize_CV2(object):
         size = get_size((frames.shape[2], frames.shape[3]), self.size, self.max_size)
         rescaled_frames = F.resize(frames, size, antialias=True)
 
-        if target is None:
-            return rescaled_frames, None
-
-        ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_frames.shape[1:], frames.shape[1:]))
-        ratio_width, ratio_height = ratios
-
-        target = target.copy()
-        if "boxes" in target:
-            boxes = target["boxes"]
-            scaled_boxes = boxes * torch.as_tensor(
-                [ratio_width, ratio_height, ratio_width, ratio_height]
-            )
-            target["boxes"] = scaled_boxes
-
-        if "area" in target:
-            area = target["area"]
-            scaled_area = area * (ratio_width * ratio_height)
-            target["area"] = scaled_area
-
-        h, w = size
-        target["size"] = torch.tensor([h, w])
-
-        if "masks" in target:
-            target["masks"] = (
-                interpolate(target["masks"][:, None].float(), size, mode="nearest")[:, 0] > 0.5
-            )
-
-        return rescaled_frames, target
+        return rescaled_frames, None
     
 class Normalize(object):
     def __init__(self, mean, std):
