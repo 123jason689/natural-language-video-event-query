@@ -13,6 +13,13 @@ import cv2
 import numpy as np
 from frame_enhancement import *
 
+class VidTensor:
+    def __init__(self, vid:cv2.VideoCapture, load_device:torch.device):
+        self.device = load_device
+        self.fps = vid.get(cv2.CAP_PROP_FPS)
+        self.total_frame = vid.get(cv2.CAP_PROP_FRAME_COUNT)
+        self.vid_tensor = bgr_vid_to_rgb_tensor(vid, torch.device("cpu"))
+
 def fps_scale_down_to_np_arr(vid_file: cv2.VideoCapture, fps: int, output_type: Literal['list', 'iter'] = 'list' ) -> Union[List[np.typing.ArrayLike], Iterator[np.typing.ArrayLike]]:
     """
     CAUTION
@@ -156,7 +163,7 @@ def vid_to_np_arr(vid_file: cv2.VideoCapture) -> np.typing.NDArray[np.uint8]:
 
     return np.stack(frames)
 
-def vid_to_torch_tensor(vid_file: cv2.VideoCapture, return_dtype:torch.dtype = torch.float32) -> torch.Tensor:
+def bgr_vid_to_rgb_tensor(vid_file: cv2.VideoCapture, device:torch.device) -> torch.Tensor:
     """
     Load all frames from a video file to torch tensor format ready for .
 
@@ -167,162 +174,50 @@ def vid_to_torch_tensor(vid_file: cv2.VideoCapture, return_dtype:torch.dtype = t
 
     Returns
     -------
-    np.ndarray
-        A NumPy array of shape (num_frames, H, W, 3), dtype=uint8,
+    torch.Tensor
+        A Tensor of shape (num_frames, H, W, 3), dtype=uint8,
         containing all video frames in RGB order.
     """
     if not vid_file.isOpened():
         raise ValueError("File is not opened, VideoCapture instance is empty. Make sure to load the video first")
 
-    T = int(vid_file.get(cv2.CAP_PROP_FRAME_COUNT))
-    H = int(vid_file.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    W = int(vid_file.get(cv2.CAP_PROP_FRAME_WIDTH))
-    C = 3 # RGB
+    frames:List = []
 
-    frames: torch.Tensor = torch.empty((T,H,W,C), dtype=torch.uint8)
-
-    for frame_idx in range(T):
+    while True:
         ret, frame = vid_file.read()
         if not ret:
             break
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frames[frame_idx] = torch.from_numpy(frame)
+        frames.append(torch.from_numpy(frame))
+    
+    thwc = torch.stack(frames, dim=0)
 
-    permute_THWC_to_TCHW(frames).to(dtype=return_dtype)
-
-    return frames
+    if device.type == "cpu":
+        return permute_THWC_to_TCHW(thwc).contiguous().to(device, dtype=torch.float32)
+    else:
+        return permute_THWC_to_TCHW(thwc).contiguous().to(device, dtype=torch.float16)
 
 def permute_THWC_to_TCHW(img_tensor:torch.Tensor)->torch.Tensor:
-    return img_tensor.permute(0,3,1,2)
+    if img_tensor.shape[1] != 3:
+        return img_tensor.permute(0,3,1,2)
 
 ## input (B,H,W,C)
 @torch.inference_mode()
-def load_frame_formated(frames:torch.Tensor, device)->torch.Tensor:
+def load_frame_formated(vid: VidTensor, device:torch.device)->torch.Tensor:
+    frames = vid.vid_tensor
     if frames.shape[-1] < frames.shape[1]:
-        frames = permute_THWC_to_TCHW(frames)
-    transform = T.Compose(
+        vid.vid_tensor = permute_THWC_to_TCHW(frames)
+    transform = Compose(
         [
-            To_Dtype_Device(torch.float32, device),
-            Auto_Enhance(),
+            FPSDownsample(),
+            AutoEnhance(),
             Resize(800, max_size=1333),
             Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]
     )
-    frames_transformed, _ = transform(frames, None)
+    frames_transformed, _ = transform(vid.vid_tensor, None)
     return frames_transformed
 
-# helpers / altered from source code
-class Resize(object):
-    def __init__(self, size, max_size=None):
-        self.size = size
-        self.max_size = max_size
 
-    def __call__(self, frames, target=None):
-        return self.resize(frames, target), target
-    
-    def resize(self, frames):
-        # size can be min_size (scalar) or (w, h) tuple
-
-        def get_size_with_aspect_ratio(image_size, size, max_size=None):
-            w, h = image_size
-            if max_size is not None:
-                min_original_size = float(min((w, h)))
-                max_original_size = float(max((w, h)))
-                if max_original_size / min_original_size * size > max_size:
-                    size = int(round(max_size * min_original_size / max_original_size))
-
-            if (w <= h and w == size) or (h <= w and h == size):
-                return (h, w)
-
-            if w < h:
-                ow = size
-                oh = int(size * h / w)
-            else:
-                oh = size
-                ow = int(size * w / h)
-
-            return (oh, ow)
-
-        def get_size(image_size, size, max_size=None):
-            if isinstance(size, (list, tuple)):
-                return size[::-1]
-            else:
-                return get_size_with_aspect_ratio(image_size, size, max_size)
-
-        # tensor format (T, C, H, W)
-        size = get_size((frames.shape[2], frames.shape[3]), self.size, self.max_size)
-        rescaled_frames = F.resize(frames, size, antialias=True)
-
-        return rescaled_frames
-    
-class Normalize(object):
-    def __init__(self, mean, std):
-        self.mean = mean
-        self.std = std
-
-    def __call__(self, frames, target=None):
-        frames = F.normalize(frames, mean=self.mean, std=self.std)
-        if target is None:
-            return frames, None
-        return frames, target
-
-class SavedToHistory:
-    def __init__(self, save_dir:str):
-        path = os.fspath(save_dir)
-        if not path:
-            raise ValueError("save_dir must be a non-empty path")
-
-        # If path exists ensure it's a directory, otherwise try to create it
-        if os.path.exists(path):
-            if not os.path.isdir(path):
-                raise NotADirectoryError(f"Path exists and is not a directory: {path}")
-        else:
-            try:
-                os.makedirs(path, exist_ok=True)
-            except Exception as e:
-                raise OSError(f"Unable to create directory '{path}': {e}") from e
-
-        self.save_dir = path
-
-    def __call__(self, video_tchw:torch.tensor, target = None):
-        ##
-        ##
-        ## MAKE SURE TO FIX THIS, THE FPS IS STATIC, NEEDS TO REFERENCE THE ORIGINAL VIDEO
-        ## can be made into an object / class style before passing in
-        ##
-        ##
-        self.tensor_to_video(video_tchw, 30)
-        return video_tchw, target
-
-    def tensor_to_video(self, video_tchw:torch.tensor, fps:int, file_name=None):
-
-        assert video_tchw.ndim == 4, "Expected tensor with (T,C,H,W)"
-        assert video_tchw.shape[1] == 3, "Expected Channel to be RGB"
-
-        if video_tchw.is_floating_point():
-            video_np = (video_tchw.clamp(0,1) * 255).byte().cpu().numpy()
-        else:
-            video_np = video_tchw.cpu().numpy()
         
-        video_np = np.transpose(video_np, (0,2,3,1))
-        t,h,w,c = video_np.shape
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        
-        out_path = self.save_dir if self.save_dir[-1] is "/" else self.save_dir+"/"
-        out_file = f"{out_path}{file_name}.mp4"
-
-        index = 0
-        while os.path.isfile(out_file):
-            out_file = f"{out_path}{file_name}_{index:02d}.mp4"
-            index += 1
-            
-
-        writer = cv2.VideoWriter(out_file, fourcc, fps, (w, h))
-
-        for frame in video_np:
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            writer.write(frame_bgr)
-
-        writer.release()
-        print(f"Saved {out_path} ({t} frames at {fps} FPS, size {w}x{h})")

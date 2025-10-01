@@ -3,8 +3,13 @@ import kornia.filters as KF
 import kornia.enhance as KE
 import torch.nn.functional as F
 import torch
+import os
+import numpy as np
+import cv2
+from preprocess import VidTensor
 
-class Auto_Enhance:
+
+class AutoEnhance:
 
     def __init__(self, ema_alpha = 0.6, clahe_chunk = 128):
         self.ema_alpha = ema_alpha
@@ -148,13 +153,159 @@ class Auto_Enhance:
         
         return x_work
     
-class To_Dtype_Device:
-    def __init__(self, dtype, device:str):
+class ToDtypeDevice:
+    def __init__(self, dtype, device:torch.device):
         assert dtype in (torch.float32, torch.float16, torch.bfloat16, torch.int8, torch.int16, torch.int32, torch.int64), "dtype not supported, please choose torch.float16 for GPU and torch.float32 for CPU."
-        assert device in ("cpu", "cuda", 'mps', 'xla') or device.find("cuda") != -1, "Device not found / not supported" 
         self.device = device
         self.dtype = dtype
     
     def __call__(self, video_tchw:torch.Tensor, target = None):
-        video_tchw = video_tchw.to(self.device, dtype=self.dtype)
+        video_tchw.pin_memory()
+        video_tchw = video_tchw.to(self.device, dtype=self.dtype, non_blocking=True)
         return video_tchw, target
+    
+# helpers / altered from source code
+class Resize(object):
+    def __init__(self, size, max_size=None):
+        self.size = size
+        self.max_size = max_size
+
+    def __call__(self, frames, target=None):
+        return self.resize(frames, target), target
+    
+    def resize(self, frames):
+        # size can be min_size (scalar) or (w, h) tuple
+
+        def get_size_with_aspect_ratio(image_size, size, max_size=None):
+            w, h = image_size
+            if max_size is not None:
+                min_original_size = float(min((w, h)))
+                max_original_size = float(max((w, h)))
+                if max_original_size / min_original_size * size > max_size:
+                    size = int(round(max_size * min_original_size / max_original_size))
+
+            if (w <= h and w == size) or (h <= w and h == size):
+                return (h, w)
+
+            if w < h:
+                ow = size
+                oh = int(size * h / w)
+            else:
+                oh = size
+                ow = int(size * w / h)
+
+            return (oh, ow)
+
+        def get_size(image_size, size, max_size=None):
+            if isinstance(size, (list, tuple)):
+                return size[::-1]
+            else:
+                return get_size_with_aspect_ratio(image_size, size, max_size)
+
+        # tensor format (T, C, H, W)
+        size = get_size((frames.shape[2], frames.shape[3]), self.size, self.max_size)
+        rescaled_frames = F.resize(frames, size, antialias=True)
+
+        return rescaled_frames
+    
+class Normalize(object):
+    def __init__(self, mean, std):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, frames, target=None):
+        frames = F.normalize(frames, mean=self.mean, std=self.std)
+        if target is None:
+            return frames, None
+        return frames, target
+
+class SavedToHistory:
+    def __init__(self, save_dir:str):
+        path = os.fspath(save_dir)
+        if not path:
+            raise ValueError("save_dir must be a non-empty path")
+
+        # If path exists ensure it's a directory, otherwise try to create it
+        if os.path.exists(path):
+            if not os.path.isdir(path):
+                raise NotADirectoryError(f"Path exists and is not a directory: {path}")
+        else:
+            try:
+                os.makedirs(path, exist_ok=True)
+            except Exception as e:
+                raise OSError(f"Unable to create directory '{path}': {e}") from e
+
+        self.save_dir = path
+
+    def __call__(self, video_tchw:torch.tensor, target = None):
+        ##
+        ##
+        ## MAKE SURE TO FIX THIS, THE FPS IS STATIC, NEEDS TO REFERENCE THE ORIGINAL VIDEO
+        ## can be made into an object / class style before passing in
+        ##
+        ##
+        self.tensor_to_video(video_tchw, 30)
+        return video_tchw, target
+
+    def tensor_to_video(self, video_tchw:torch.tensor, fps:int, file_name=None):
+
+        assert video_tchw.ndim == 4, "Expected tensor with (T,C,H,W)"
+        assert video_tchw.shape[1] == 3, "Expected Channel to be RGB"
+
+        if video_tchw.is_floating_point():
+            video_np = (video_tchw.clamp(0,1) * 255).byte().cpu().numpy()
+        else:
+            video_np = video_tchw.cpu().numpy()
+        
+        video_np = np.transpose(video_np, (0,2,3,1))
+        t,h,w,c = video_np.shape
+
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        
+        out_path = self.save_dir if self.save_dir[-1] is "/" else self.save_dir+"/"
+        out_file = f"{out_path}{file_name}.mp4"
+
+        index = 0
+        while os.path.isfile(out_file):
+            out_file = f"{out_path}{file_name}_{index:02d}.mp4"
+            index += 1
+            
+
+        writer = cv2.VideoWriter(out_file, fourcc, fps, (w, h))
+
+        for frame in video_np:
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            writer.write(frame_bgr)
+
+        writer.release()
+        print(f"Saved {out_path} ({t} frames at {fps} FPS, size {w}x{h})")
+
+
+class FPSDownsample:
+    def __init__(self, target_fps:float):
+        self.target_fps = target_fps
+
+    def __call__(self, vid_tensor:VidTensor):
+
+        """
+        NOT YET FINISHED, NEED TO FIX OTHER FUNCTIONS FIRST        
+        """
+
+        pass
+
+class Compose(object):
+    def __init__(self, transforms):
+        self.transforms = transforms
+
+    def __call__(self, vid:VidTensor):
+        for t in self.transforms:
+            vid.vid_tensor = t(vid)
+        return vid
+
+    def __repr__(self):
+        format_string = self.__class__.__name__ + "("
+        for t in self.transforms:
+            format_string += "\n"
+            format_string += "    {0}".format(t)
+        format_string += "\n)"
+        return format_string
