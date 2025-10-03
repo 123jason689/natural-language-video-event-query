@@ -6,6 +6,8 @@ import torch
 import os
 import numpy as np
 import cv2
+import math
+from typing import List
 from preprocess import VidTensor
 
 
@@ -286,12 +288,43 @@ class FPSDownsample:
         self.target_fps = target_fps
 
     def __call__(self, vid_tensor:VidTensor):
+        self.fps_scale_down_to_tensor(vid_tensor, self.target_fps)
+        return vid_tensor
+    
+    def fps_scale_down_to_tensor(self, vid_file: VidTensor, fps: float):
+        if fps == 0:
+            frame = vid_file.vid_tensor[0]
+            
+            return frame
 
-        """
-        NOT YET FINISHED, NEED TO FIX OTHER FUNCTIONS FIRST        
-        """
+        vid_fps = vid_file.fps or 0.0
+        if vid_fps > 0 and fps > vid_fps:
+            print("FPS larger than video fps. Defaulting to native video fps")
+            fps = vid_fps
 
-        pass
+        interval_ms = 1000.0 / float(fps)
+        next_keep_ms = 0.0
+        frames_keep: torch.Tensor = torch.ones(int(vid_file.total_frame), dtype=torch.bool, device=vid_file.vid_tensor.device)
+        dropped = 0
+        frame_idx = 0
+
+        while frame_idx < vid_file.total_frame:
+            timestamp_ms = vid_file.vid_frame_msec_data[frame_idx]
+            if timestamp_ms + 1e-6 >= next_keep_ms:
+                next_keep_ms += interval_ms
+            else:
+                frames_keep[frame_idx] = False
+                dropped += 1
+            frame_idx += 1
+
+        vid_file.total_frame = vid_file.total_frame - dropped
+        vid_file.fps = fps
+        vid_file.vid_tensor = vid_file.vid_tensor[frames_keep]
+        vid_file.vid_frame_msec_data = vid_file.vid_frame_msec_data[frames_keep]
+
+        assert len(vid_file.vid_tensor) == vid_file.total_frame, "Total frame and kept frame isn't synced"
+
+        print(f"Shrink FPS from {vid_fps} FPS to {fps} retaining {len(vid_file.vid_tensor)} frames while dropping {dropped} frames")
 
 class Compose(object):
     def __init__(self, transforms):

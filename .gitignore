@@ -215,3 +215,6 @@ models/*/*
 
 #vids and assets
 *.mp4
+
+# local configs
+.vscode/*
