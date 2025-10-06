@@ -9,7 +9,7 @@ import numpy as np
 import cv2
 import time
 from pathlib import Path
-from typing import List, Union, Tuple
+from typing import List, Union, Tuple, Optional
 from .typings_ import VidTensor
 
 class AutoEnhance:
@@ -284,7 +284,7 @@ class Normalize(object):
         return frames
 
 class SavedToHistory:
-    def __init__(self, save_dir:str, file_name:str):
+    def __init__(self, save_dir:str, file_name:Optional[str]=None):
         path = os.fspath(save_dir)
         if not path:
             raise ValueError("save_dir must be a non-empty path")
@@ -300,9 +300,10 @@ class SavedToHistory:
                 raise OSError(f"Unable to create directory '{path}': {e}") from e
 
         self.save_dir = path
+        self.file_name = file_name
 
     def __call__(self, video_tchw:VidTensor):
-        print(self.tensor_to_video(video_tchw.vid_tensor, video_tchw.fps))
+        print(self.tensor_to_video(video_tchw.vid_tensor, video_tchw.fps, self.file_name))
         return video_tchw
 
     def tensor_to_video(self, video_tchw: torch.Tensor, fps: float, file_name: str | None = None) -> str:
