@@ -14,7 +14,7 @@ from .typings_ import VidTensor
 
 class AutoEnhance:
 
-    def __init__(self, ema_alpha = 0.6, clahe_chunk = 128):
+    def __init__(self, ema_alpha = 0.6, clahe_chunk = 16):
         self.ema_alpha = ema_alpha
         self.clahe_chunk = clahe_chunk
 
@@ -27,7 +27,8 @@ class AutoEnhance:
         self,
         video_tchw: torch.Tensor,
         ema_alpha: float,
-        clahe_chunk: int
+        chunk:int,             # process everything in this temporal chunk
+        work_dtype=None,             # choose dtype explicitly to control memory
     ) -> torch.Tensor:
         r"""
         Apply adaptive enhancement to a video tensor (T, C=3, H, W) in RGB.
@@ -77,125 +78,179 @@ class AutoEnhance:
         - CLAHE clip limit is selected per-frame but applied per-chunk for
           efficiency; for exact per-frame limits, loop per frame (slower).
         """
+        x_in = vidt
+        assert x_in.ndim == 4, "Expected (T, C, H, W)"
+        T, C, H, W = x_in.shape
+        device = x_in.device
 
-        assert video_tchw.ndim == 4, "Expected (T, C, H, W)"
-        T, C, H, W = video_tchw.shape
-        device = video_tchw.device
+        # --- choose working dtype ---
+        if work_dtype is None:
+            if device.type == "cuda":
+                work_dtype = torch.float16  # usually fine for Kornia on GPU; change to bfloat16/float32 if needed
+            else:
+                work_dtype = torch.float32
 
-        # ---- dtype & range ----
-        if video_tchw.dtype == torch.uint8:
-            x = video_tchw.to(device=device, dtype=torch.float32) / 255.0
-        else:
-            x = video_tchw.to(device=device)
+        # --- preallocate output (we write final frames here) ---
+        out = torch.empty((T, C, H, W), device=device, dtype=work_dtype)
 
-        # ---- diagnostics (per-frame) ----
-        # Luminance & contrast
-        ycbcr = K.color.rgb_to_ycbcr(x)
-        Y = ycbcr[:, :1]                                # (T,1,H,W)
-        Y_mean = Y.mean(dim=(2,3))                      # (T,1)
-        Y_std  = Y.std(dim=(2,3)) + 1e-8                # (T,1)
+        # --- EMA state (initialized lazily on first frame) ---
+        Y_mean_s_prev = None     # (1,)
+        Y_std_s_prev  = None     # (1,)
+        sharp_s_prev  = None     # (1,)
+        noise_s_prev  = None     # (1,)
+        wb_gain_s_prev = None    # (C,)
 
-        # Sharpness proxy (variance of Laplacian)
-        lap = KF.laplacian(Y, kernel_size=3)
-        sharp = lap.pow(2).mean(dim=(2,3))              # (T,1)
+        # helper: one-step EMA update: y_t = alpha * v_t + (1 - alpha) * y_{t-1}
+        def ema_step(v_t, y_prev):
+            if y_prev is None:
+                return v_t
+            return ema_alpha * v_t + (1.0 - ema_alpha) * y_prev
 
-        # Gray-world gains (color cast)
-        means = x.mean(dim=(2,3))                       # (T,C)
-        m_avg = means.mean(dim=1, keepdim=True)         # (T,1)
-        wb_gain = (m_avg / (means + 1e-6)).clamp(0.6, 1.6)  # (T,C)
+        # --- process in temporal chunks end-to-end ---
+        for s in range(0, T, chunk):
+            e = min(s + chunk, T)
 
-        # Noise proxy (high-frequency energy)
-        blur = KF.gaussian_blur2d(x, (3,3), (1.0,1.0))
-        hf = (x - blur)
-        noise_level = hf.abs().mean(dim=(1,2,3), keepdim=True)  # (T,1)
+            # ---- load/convert into output slice to avoid extra buffers ----
+            # We'll operate in-place on out[s:e].
+            if x_in.dtype == torch.uint8:
+                # Convert & scale in one pass
+                out[s:e].copy_(x_in[s:e].to(dtype=work_dtype))
+                out[s:e].div_(255.0)
+            else:
+                # If already float on same device and same dtype -> cheap view copy
+                out[s:e].copy_(x_in[s:e].to(dtype=work_dtype))
 
-        # ---- EMA over time (to avoid flicker) ----
-        def ema_time(v: torch.Tensor, alpha: float) -> torch.Tensor:
-            # v: (T,K) or (T,1)
-            y = v.clone()
-            for t in range(1, T):
-                y[t] = alpha * y[t] + (1 - alpha) * y[t-1]
-            return y
+            xb = out[s:e]  # (B, C, H, W), B = e - s
 
-        Y_mean_s  = ema_time(Y_mean, ema_alpha)     # (T,1)
-        Y_std_s   = ema_time(Y_std, ema_alpha)      # (T,1)
-        sharp_s   = ema_time(sharp, ema_alpha)      # (T,1)
-        noise_s   = ema_time(noise_level.squeeze(-1), ema_alpha)  # (T,1)
-        wb_gain_s = ema_time(wb_gain, ema_alpha)    # (T,C)
+            # ---- compute diagnostics per-frame in this chunk ----
+            # Luminance & contrast
+            ycbcr = K.color.rgb_to_ycbcr(xb)      # alloc (B,3,H,W)
+            Y = ycbcr[:, :1]                      # view (B,1,H,W)
+            Y_mean = Y.mean(dim=(2, 3))           # (B,1)
+            Y_std  = Y.std(dim=(2, 3)) + 1e-8     # (B,1)
 
-        # ---- derive adaptive params ----
-        # Gamma: <1 brightens shadows
-        gamma = torch.where(Y_mean_s < 0.22, torch.full_like(Y_mean_s, 0.70),
-                torch.where(Y_mean_s < 0.35, torch.full_like(Y_mean_s, 0.80),
-                torch.where(Y_mean_s < 0.55, torch.full_like(Y_mean_s, 0.90),
-                            torch.full_like(Y_mean_s, 1.00))))  # (T,1)
+            # Sharpness proxy (variance of Laplacian)
+            lap = KF.laplacian(Y, kernel_size=3)  # (B,1,H,W)
+            sharp = lap.pow(2).mean(dim=(2, 3))   # (B,1)
 
-        # CLAHE clip limit: stronger for low contrast
-        clahe = torch.where(Y_std_s < 0.05, torch.full_like(Y_std_s, 3.5),
-                torch.where(Y_std_s < 0.08, torch.full_like(Y_std_s, 2.5),
-                torch.where(Y_std_s < 0.12, torch.full_like(Y_std_s, 1.8),
-                            torch.full_like(Y_std_s, 1.2))))   # (T,1)
+            # Gray-world gains (color cast)
+            means = xb.mean(dim=(2, 3))           # (B,C)
+            m_avg = means.mean(dim=1, keepdim=True)     # (B,1)
+            wb_gain = (m_avg / (means + 1e-6)).clamp(0.6, 1.6)  # (B,C)
 
-        # Denoise kernel size: 0 (skip), 3 or 5
-        ksize = torch.where(noise_s > 0.06, torch.full_like(noise_s, 5.0),
+            # Noise proxy (high-frequency energy)
+            blur = KF.gaussian_blur2d(xb, (3, 3), (1.0, 1.0))
+            hf = xb - blur
+            noise_level = hf.abs().mean(dim=(1, 2, 3), keepdim=True)  # (B,1)
+
+            # ---- EMA per frame (streaming across the chunk) ----
+            # Prepare holders for this chunk's smoothed stats (we reuse tensors to avoid many small allocs)
+            Y_mean_s  = torch.empty_like(Y_mean)
+            Y_std_s   = torch.empty_like(Y_std)
+            sharp_s   = torch.empty_like(sharp)
+            noise_s   = torch.empty_like(noise_level)
+
+            wb_gain_s = torch.empty_like(wb_gain)
+
+            for i in range(e - s):
+                # squeeze to scalars/vectors for EMA, then re-expand
+                Ym  = Y_mean[i, 0]
+                Ys  = Y_std[i, 0]
+                Sh  = sharp[i, 0]
+                Nl  = noise_level[i, 0, 0, 0]
+                Wbg = wb_gain[i]  # (C,)
+
+                Y_mean_s_prev = ema_step(Ym, Y_mean_s_prev)
+                Y_std_s_prev  = ema_step(Ys, Y_std_s_prev)
+                sharp_s_prev  = ema_step(Sh, sharp_s_prev)
+                noise_s_prev  = ema_step(Nl, noise_s_prev)
+                wb_gain_s_prev = ema_step(Wbg, wb_gain_s_prev)
+
+                Y_mean_s[i, 0] = Y_mean_s_prev
+                Y_std_s[i, 0]  = Y_std_s_prev
+                sharp_s[i, 0]  = sharp_s_prev
+                noise_s[i, 0, 0, 0] = noise_s_prev
+                wb_gain_s[i] = wb_gain_s_prev
+
+            # ---- derive adaptive params for this chunk ----
+            # Gamma (<1 brightens)
+            gamma = torch.where(
+                Y_mean_s < 0.22, torch.full_like(Y_mean_s, 0.70),
+                torch.where(
+                    Y_mean_s < 0.35, torch.full_like(Y_mean_s, 0.80),
+                    torch.where(
+                        Y_mean_s < 0.55, torch.full_like(Y_mean_s, 0.90),
+                        torch.full_like(Y_mean_s, 1.00),
+                    ),
+                ),
+            )  # (B,1)
+
+            # CLAHE clip limit
+            clahe = torch.where(
+                Y_std_s < 0.05, torch.full_like(Y_std_s, 3.5),
+                torch.where(
+                    Y_std_s < 0.08, torch.full_like(Y_std_s, 2.5),
+                    torch.where(
+                        Y_std_s < 0.12, torch.full_like(Y_std_s, 1.8),
+                        torch.full_like(Y_std_s, 1.2),
+                    ),
+                ),
+            )  # (B,1)
+
+            # Denoise kernel size (0,3,5)
+            ksize = torch.where(
+                noise_s > 0.06, torch.full_like(noise_s, 5.0),
                 torch.where(noise_s > 0.035, torch.full_like(noise_s, 3.0),
-                            torch.full_like(noise_s, 0.0)))     # (T,1)
+                            torch.full_like(noise_s, 0.0))
+            ).squeeze(-1).squeeze(-1).squeeze(-1)  # -> (B,)
 
-        # Unsharp amount: more when blurrier, less when noisy
-        base_sharp = torch.where(sharp_s < 0.002, 0.9,
-                    torch.where(sharp_s < 0.006, 0.7, 0.5)).to(x.dtype)  # (T,1)
-        noise_penalty = (noise_s.clamp(0, 0.08) / 0.08) * 0.4              # (T,1)
-        usm_amount = (base_sharp - noise_penalty).clamp(0.3, 1.0)          # (T,1)
 
-        # ---- apply enhancements per-frame (but vectorized where safe) ----
-        # 1) Denoise (median when requested)
-        x_work = x  # (T,C,H,W)
-        if ksize.max() > 0:
-            mask3 = (ksize.squeeze(-1) == 3)
-            mask5 = (ksize.squeeze(-1) == 5)
-            if mask3.any():
-                x_work[mask3] = KF.median_blur(x_work[mask3], (3,3))
-            if mask5.any():
-                x_work[mask5] = KF.median_blur(x_work[mask5], (5,5))
+            # Unsharp amount
+            base_sharp = torch.where(sharp_s < 0.002, 0.9,
+                        torch.where(sharp_s < 0.006, 0.7, 0.5)).to(xb.dtype)  # (B,1)
+            noise_penalty = (noise_s.clamp(0, 0.08) / 0.08) * 0.4
+            usm_amount = (base_sharp - noise_penalty).clamp(0.3, 1.0)  # (B,1)
 
-        # 2) White balance (per-frame gains)
-        gains = wb_gain_s.view(T, C, 1, 1).to(x_work.dtype)
-        x_work = (x_work * gains).clamp(0, 1)
+            # ---- apply enhancements (in-place where safe) ----
 
-        # 3) Gamma (pointwise)
-        # Kornia's adjust_gamma(x, gamma) ≈ x**gamma (gamma<1 brightens)
-        x_work = x_work.clamp(0, 1)
-        # broadcast (T,1,1,1)
-        x_work = x_work ** gamma.view(T, 1, 1, 1).to(x_work.dtype)
+            # 1) Denoise (avoid boolean indexing gather; index lists)
+            idx3 = (ksize == 3).nonzero(as_tuple=False).squeeze(1)
+            idx5 = (ksize == 5).nonzero(as_tuple=False).squeeze(1)
+            if idx3.numel():
+                xb[idx3] = KF.median_blur(xb[idx3], (3, 3))
+            if idx5.numel():
+                xb[idx5] = KF.median_blur(xb[idx5], (5, 5))
 
-        # 4) CLAHE on luminance (per-frame clipLimit → process in chunks)
-        ycbcr = K.color.rgb_to_ycbcr(x_work)
-        Y = ycbcr[:, :1]
-        Y2_list = []
-        for s in range(0, T, clahe_chunk):
-            e = min(s + clahe_chunk, T)
-            sub = Y[s:e]
-            cl = float(clahe[s].item())  # pick frame-specified clip; small batches keep variance low
-            # If you want *exact* per-frame clip limits, loop per frame (slower).
-            Y2_list.append(KE.equalize_clahe(sub, clip_limit=cl, grid_size=(8,8)))
-        Y2 = torch.cat(Y2_list, dim=0)
-        ycbcr = torch.cat([Y2, ycbcr[:, 1:]], dim=1)
-        x_work = K.color.ycbcr_to_rgb(ycbcr).clamp(0, 1)
+            # 2) White balance (per-frame gains), in-place
+            gains = wb_gain_s.view(-1, C, 1, 1).to(xb.dtype)
+            xb.mul_(gains).clamp_(0, 1)
 
-        # 5) Unsharp mask (per-frame amount; chunked)
-        out_list = []
-        for s in range(0, T, clahe_chunk):
-            e = min(s + clahe_chunk, T)
-            sharp_fixed = KF.unsharp_mask(
-                x_work[s:e], kernel_size=(5, 5), sigma=(1.5, 1.5), border_type='reflect'
-            )
-            # 2) Adaptive blend: out = (1 - a) * original + a * sharpened
-            a = usm_amount[s:e].to(x_work.dtype).view(-1, 1, 1, 1)  # (N,1,1,1)
-            out_list.append(torch.lerp(x_work[s:e], sharp_fixed, a))
+            # 3) Gamma, in-place
+            xb.clamp_(0, 1)
+            xb.pow_(gamma.view(-1, 1, 1, 1).to(xb.dtype))
 
-        x_work = torch.cat(out_list, dim=0).clamp(0, 1)
-        
-        return x_work
+            # 4) CLAHE on luminance; per-frame clip. Loop per frame to avoid a big concat.
+            #    (Small loop over B keeps memory low.)
+            for i in range(e - s):
+                ycbcr_i = K.color.rgb_to_ycbcr(xb[i:i+1])      # (1,3,H,W)
+                Y_i = ycbcr_i[:, :1]
+                cl = float(clahe[i, 0].item())
+                Y2_i = KE.equalize_clahe(Y_i, clip_limit=cl, grid_size=(8, 8))
+                ycbcr_i = torch.cat([Y2_i, ycbcr_i[:, 1:]], dim=1)
+                xb[i:i+1] = K.color.ycbcr_to_rgb(ycbcr_i).clamp_(0, 1)
+
+            # 5) Unsharp mask; per-frame amount. Loop keeps memory bounded.
+            for i in range(e - s):
+                amt = float(usm_amount[i, 0].item())
+                xb[i:i+1] = KE.unsharp_mask(
+                    xb[i:i+1], kernel_size=(5, 5), sigma=(1.5, 1.5),
+                    amount=amt, threshold=0.0
+                ).clamp_(0, 1)
+
+            # xb already writes into out[s:e] (no extra copies)
+
+        # write back
+        return out
     
 class ToDtypeDevice:
     def __init__(self, dtype, device:torch.device):
@@ -266,7 +321,7 @@ class Normalize(object):
         return frames
 
 class SavedToHistory:
-    def __init__(self, save_dir:str):
+    def __init__(self, save_dir:str, file_name:str):
         path = os.fspath(save_dir)
         if not path:
             raise ValueError("save_dir must be a non-empty path")
