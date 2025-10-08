@@ -10,7 +10,7 @@ import cv2
 import time
 from pathlib import Path
 from typing import List, Union, Tuple, Optional
-from .typings_ import VidTensor
+from .typings_ import FrameBatch
 
 class AutoEnhance:
 
@@ -18,9 +18,9 @@ class AutoEnhance:
         self.ema_alpha = ema_alpha
         self.clahe_chunk = clahe_chunk
 
-    def __call__(self, video_tchw: VidTensor):
-        video_tchw.vid_tensor = self.adaptive_enhance_for_detection_TCHW(video_tchw.vid_tensor, self.ema_alpha, self.clahe_chunk)
-        return video_tchw
+    def __call__(self, batch: FrameBatch) -> FrameBatch:
+        batch.frames = self.adaptive_enhance_for_detection_TCHW(batch.frames, self.ema_alpha, self.clahe_chunk)
+        return batch
 
     @torch.inference_mode()
     def adaptive_enhance_for_detection_TCHW(
@@ -221,11 +221,12 @@ class ToDtypeDevice:
         self.device = device
         self.dtype = dtype
     
-    def __call__(self, video_tchw:VidTensor):
-        video_tchw.vid_tensor.pin_memory()
-        video_tchw.vid_tensor = video_tchw.vid_tensor.to(self.device, dtype=self.dtype, non_blocking=True)
-        video_tchw.device = self.device
-        return video_tchw
+    def __call__(self, batch: FrameBatch) -> FrameBatch:
+        if batch.frames.device.type == "cpu":
+            batch.frames = batch.frames.pin_memory()
+        batch.frames = batch.frames.to(self.device, dtype=self.dtype, non_blocking=True)
+        batch.device = batch.frames.device
+        return batch
     
 # helpers / altered from source code
 class Resize(object):
@@ -233,10 +234,10 @@ class Resize(object):
         self.size = size
         self.max_size = max_size
 
-    def __call__(self, frames:VidTensor):
-        frames.vid_tensor = self.resize(frames.vid_tensor)
-        frames.height, frames.width = frames.vid_tensor.shape[2], frames.vid_tensor.shape[3]
-        return frames
+    def __call__(self, batch: FrameBatch) -> FrameBatch:
+        batch.frames = self.resize(batch.frames)
+        batch.height, batch.width = batch.frames.shape[2], batch.frames.shape[3]
+        return batch
     
     def resize(self, frames:torch.Tensor):
         # size can be min_size (scalar) or (w, h) tuple
@@ -279,9 +280,9 @@ class Normalize(object):
         self.mean = mean
         self.std = std
 
-    def __call__(self, frames:VidTensor):
-        frames.vid_tensor = VF.normalize(frames.vid_tensor, mean=self.mean, std=self.std, inplace=True)
-        return frames
+    def __call__(self, batch: FrameBatch) -> FrameBatch:
+        batch.frames = VF.normalize(batch.frames, mean=self.mean, std=self.std, inplace=True)
+        return batch
 
 class SavedToHistory:
     def __init__(self, save_dir:str, file_name:Optional[str]=None):
@@ -302,9 +303,10 @@ class SavedToHistory:
         self.save_dir = path
         self.file_name = file_name
 
-    def __call__(self, video_tchw:VidTensor):
-        print(self.tensor_to_video(video_tchw.vid_tensor, video_tchw.fps, self.file_name))
-        return video_tchw
+    def __call__(self, batch: FrameBatch) -> FrameBatch:
+        file_stub = self.file_name or f"batch_{batch.batch_id:04d}"
+        print(self.tensor_to_video(batch.frames, batch.fps, file_stub))
+        return batch
 
     def tensor_to_video(self, video_tchw: torch.Tensor, fps: float, file_name: str | None = None) -> str:
         """
@@ -373,56 +375,37 @@ class FPSDownsample:
     def __init__(self, target_fps:float):
         self.target_fps = target_fps
 
-    def __call__(self, vid_tensor:VidTensor):
-        self.fps_scale_down_to_tensor(vid_tensor, self.target_fps)
-        assert isinstance(vid_tensor, VidTensor), "Not a VidTensor instance anymore"
-        assert isinstance(vid_tensor.vid_tensor, torch.Tensor), "Not a VidTensor.vid_tensor instance anymore"
-        print(vid_tensor.vid_tensor.ndim)
-        return vid_tensor
-    
-    def fps_scale_down_to_tensor(self, vid_file: VidTensor, fps: float):
-        if fps == 0:
-            frame = vid_file.vid_tensor[0]
-            
-            return frame
+    def __call__(self, batch: FrameBatch) -> FrameBatch:
+        if self.target_fps <= 0 or batch.fps <= 0 or self.target_fps >= batch.fps:
+            return batch
 
-        vid_fps = vid_file.fps or 0.0
-        if vid_fps > 0 and fps > vid_fps:
-            print("FPS larger than video fps. Defaulting to native video fps")
-            fps = vid_fps
-
-        interval_ms = 1000.0 / float(fps)
+        interval_ms = 1000.0 / float(self.target_fps)
+        keep_mask = torch.zeros(batch.frames.shape[0], dtype=torch.bool)
         next_keep_ms = 0.0
-        frames_keep: torch.Tensor = torch.ones(int(vid_file.total_frame), dtype=torch.bool, device=vid_file.vid_tensor.device)
-        dropped = 0
-        frame_idx = 0
-
-        while frame_idx < vid_file.total_frame:
-            timestamp_ms = vid_file.vid_frame_msec_data[frame_idx]
-            if timestamp_ms + 1e-6 >= next_keep_ms:
+        kept = 0
+        for idx, ts in enumerate(batch.timestamps_ms.tolist()):
+            if ts + 1e-6 >= next_keep_ms:
+                keep_mask[idx] = True
+                kept += 1
                 next_keep_ms += interval_ms
-            else:
-                frames_keep[frame_idx] = False
-                dropped += 1
-            frame_idx += 1
 
-        vid_file.total_frame = vid_file.total_frame - dropped
-        vid_file.fps = fps
-        vid_file.vid_tensor = vid_file.vid_tensor[frames_keep]
-        vid_file.vid_frame_msec_data = vid_file.vid_frame_msec_data[frames_keep]
+        if kept == 0:
+            return batch
 
-        assert len(vid_file.vid_tensor) == vid_file.total_frame, "Total frame and kept frame isn't synced"
-
-        print(f"Shrink FPS from {vid_fps} FPS to {fps} retaining {len(vid_file.vid_tensor)} frames while dropping {dropped} frames")
+        batch.frames = batch.frames[keep_mask]
+        batch.timestamps_ms = batch.timestamps_ms[keep_mask]
+        batch.frame_indices = batch.frame_indices[keep_mask]
+        batch.fps = self.target_fps
+        return batch
 
 class Compose(object):
     def __init__(self, transforms):
         self.transforms = transforms
 
-    def __call__(self, vid:VidTensor):
+    def __call__(self, batch: FrameBatch) -> FrameBatch:
         for t in self.transforms:
-            vid.vid_tensor = t(vid)
-        return vid
+            batch = t(batch)
+        return batch
 
     def __repr__(self):
         format_string = self.__class__.__name__ + "("
@@ -431,34 +414,3 @@ class Compose(object):
             format_string += "    {0}".format(t)
         format_string += "\n)"
         return format_string
-
-
-# python main.py
-# FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
-# UserWarning: Failed to load custom C++ ops. Running on CPU mode Only!
-# UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\TensorShape.cpp:4324.)
-# final text_encoder_type: bert-base-uncased
-# Shrink FPS from 30.0 FPS to 6 retaining 128 frames while dropping 510 frames
-# Traceback (most recent call last):
-#   File "C:\Users\jason\Docs\programming-project\AI\natural-language-video-event-query\main.py", line 13, in <module>
-#     video_formated = load_frame_formated(video_formated) # format for GDino compatiblity
-#                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-#   File "C:\Users\jason\miniconda3\envs\nlvideo\Lib\site-packages\torch\utils\_contextlib.py", line 120, in decorate_context
-#     return func(*args, **kwargs)
-#            ^^^^^^^^^^^^^^^^^^^^^
-#   File "C:\Users\jason\Docs\programming-project\AI\natural-language-video-event-query\libs\preprocess.py", line 171, in load_frame_formated
-#     frames_transformed = transform(vid)
-#                          ^^^^^^^^^^^^^^
-#   File "C:\Users\jason\Docs\programming-project\AI\natural-language-video-event-query\libs\frame_enhancement.py", line 403, in __call__
-#     vid.vid_tensor = t(vid)
-#                      ^^^^^^
-#   File "C:\Users\jason\Docs\programming-project\AI\natural-language-video-event-query\libs\frame_enhancement.py", line 23, in __call__
-#     video_tchw.vid_tensor = self.adaptive_enhance_for_detection_TCHW(video_tchw.vid_tensor, self.ema_alpha, self.clahe_chunk)
-#                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-#   File "C:\Users\jason\miniconda3\envs\nlvideo\Lib\site-packages\torch\utils\_contextlib.py", line 120, in decorate_context
-#     return func(*args, **kwargs)
-#            ^^^^^^^^^^^^^^^^^^^^^
-#   File "C:\Users\jason\Docs\programming-project\AI\natural-language-video-event-query\libs\frame_enhancement.py", line 82, in adaptive_enhance_for_detection_TCHW
-#     assert video_tchw.ndim == 4, "Expected (T, C, H, W)"
-#            ^^^^^^^^^^^^^^^
-# AttributeError: 'VidTensor' object has no attribute 'ndim'

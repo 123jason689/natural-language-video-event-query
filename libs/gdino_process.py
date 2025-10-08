@@ -1,19 +1,26 @@
-from groundingdino.util.inference import load_model, predict, annotate
-import groundingdino.datasets.transforms as T
-from groundingdino.models import build_model
-from groundingdino.util.misc import clean_state_dict
-from groundingdino.util.slconfig import SLConfig
-from groundingdino.util.utils import get_phrases_from_posmap
-from torchvision.ops import box_convert
-
-import numpy as np
-import torch
-from typing import Tuple, List, Dict, Optional
-import supervision as sv
-import cv2
-from .preprocess import VidTensor
 import os
 import time
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+import cv2
+import numpy as np
+import supervision as sv
+import torch
+from groundingdino.util.inference import annotate, load_model, predict
+from torchvision.ops import box_convert
+
+from .typings_ import FrameBatch
+
+
+@dataclass
+class DetectionResult:
+    frame_index: int
+    timestamp_ms: float
+    detections: sv.Detections
+    phrases: List[str]
+    boxes_cxcywh: torch.Tensor
+    logits: torch.Tensor
 
 class Model:
 
@@ -32,13 +39,11 @@ class Model:
 
     def predict_with_classes(
         self,
-        preprocessed_vid_tensor: VidTensor,
+        frame_batch: FrameBatch,
         classes: List[str],
         box_threshold: float,
         text_threshold: float,
-        save_anotated: bool,
-        dir_path: Optional[str]
-    ) -> List[Tuple[sv.Detections, List[str]]]:
+    ) -> List[DetectionResult]:
         """
         import cv2
 
@@ -59,10 +64,13 @@ class Model:
         annotated_image = box_annotator.annotate(scene=image, detections=detections)
         """
         caption = ". ".join(classes)
-        processed_frames = preprocessed_vid_tensor.vid_tensor.to(torch.device(self.device))
-        raw_Res = []
-        results = []
-        for i in range(int(preprocessed_vid_tensor.total_frame)):
+        processed_frames = frame_batch.frames.to(self.device, non_blocking=True)
+
+        results: List[DetectionResult] = []
+        source_h = int(frame_batch.height)
+        source_w = int(frame_batch.width)
+
+        for i in range(processed_frames.shape[0]):
             boxes, logits, phrases = predict(
                 model=self.model,
                 image=processed_frames[i],
@@ -70,20 +78,24 @@ class Model:
                 box_threshold=box_threshold,
                 text_threshold=text_threshold,
                 device=self.device)
-            raw_Res.append((boxes, logits, phrases))
-
-        ## Saving the file into a directory
-        if save_anotated:
-            save_to_dir_anotated(preprocessed_vid_tensor, raw_Res, dir_path)
-        
-        for box, logs, phrases in raw_Res:
-            source_h, source_w= int(preprocessed_vid_tensor.height), int(preprocessed_vid_tensor.width)
             detections = Model.post_process_result(
                 source_h=source_h,
                 source_w=source_w,
-                boxes=box,
-                logits=logs)
-            results.append((detections, phrases))
+                boxes=boxes,
+                logits=logits,
+            )
+            detections.class_id = Model.phrases2classes(phrases=phrases, classes=classes)
+
+            results.append(
+                DetectionResult(
+                    frame_index=int(frame_batch.frame_indices[i].item()),
+                    timestamp_ms=float(frame_batch.timestamps_ms[i].item()),
+                    detections=detections,
+                    phrases=phrases,
+                    boxes_cxcywh=boxes.cpu(),
+                    logits=logits.cpu(),
+                )
+            )
         return results
 
     @staticmethod
@@ -170,14 +182,15 @@ def _sv_to_ocsort_array(
 
 
 def build_global_class_map(
-    sequence: List[Tuple[sv.Detections, List[str]]]
+    sequence: List[DetectionResult]
 ) -> Dict[str, int]:
     """
     Build a stable phrase->id mapping across the whole video.
     """
     vocab = []
     seen = set()
-    for _, phrases in sequence:
+    for result in sequence:
+        phrases = result.phrases
         if phrases is None:
             continue
         for p in phrases:
@@ -191,7 +204,7 @@ def build_global_class_map(
 
 
 def sequence_to_ocsort_inputs(
-    sequence: List[Tuple[sv.Detections, List[str]]],
+    sequence: List[DetectionResult],
     *,
     min_conf: float = 0.25,
     include_class: bool = False,
@@ -233,10 +246,10 @@ def sequence_to_ocsort_inputs(
             phrase_id_map = build_global_class_map(sequence)
 
     outputs: List[np.ndarray] = []
-    for dets, phrases in sequence:
+    for result in sequence:
         arr = _sv_to_ocsort_array(
-            dets,
-            phrases,
+            result.detections,
+            result.phrases,
             min_conf=min_conf,
             include_class=include_class,
             class_map=phrase_id_map,
@@ -246,60 +259,55 @@ def sequence_to_ocsort_inputs(
 
     return outputs, (phrase_id_map if include_class else None)
 
-def save_to_dir_anotated(vid_tensor:VidTensor, raw_res:List, dirpath):
 
-    if dirpath is None:
-        dirpath = "."
+def save_to_dir_anotated(
+    video_path: str,
+    frame_results: List[DetectionResult],
+    dirpath: Optional[str] = None,
+) -> Optional[str]:
+    if not frame_results:
+        return None
 
-    # Ensure directory exists
-    os.makedirs(dirpath, exist_ok=True)
+    target_dir = dirpath or "."
+    os.makedirs(target_dir, exist_ok=True)
 
     out_name = f"anotated_video_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
-    out_path = os.path.join(dirpath, out_name)
+    out_path = os.path.join(target_dir, out_name)
 
-    vid = cv2.VideoCapture(vid_tensor._file_path)
-    if not vid.isOpened():
-        return
+    capture = cv2.VideoCapture(video_path)
+    if not capture.isOpened():
+        raise FileNotFoundError(f"Unable to open video for annotation: {video_path}")
 
     fourcc = cv2.VideoWriter.fourcc(*"mp4v")
-    fps = vid.get(cv2.CAP_PROP_FPS) or 30.0
+    fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
     writer = None
-    anotate_index = 0
-    total_annotations = len(raw_res)
-    msec_list = getattr(vid_tensor, "vid_frame_msec_data", [])
 
+    # map frame index -> DetectionResult for quick lookup
+    result_map = {res.frame_index: res for res in sorted(frame_results, key=lambda r: r.frame_index)}
+
+    frame_idx = 0
     while True:
-        ret, frame = vid.read()
+        ret, frame = capture.read()
         if not ret:
             break
 
-        # convert to RGB for annotate (original code used RGB)
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        curr_msec = vid.get(cv2.CAP_PROP_POS_MSEC)
+        annotated_frame = frame
+        res = result_map.get(frame_idx)
+        if res is not None:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            annotated_rgb = annotate(frame_rgb, res.boxes_cxcywh, res.logits, res.phrases)
+            annotated_frame = cv2.cvtColor(annotated_rgb, cv2.COLOR_RGB2BGR)
 
-        # advance annotation index to match current playback time (safe-guard bounds)
-        if msec_list:
-            # move forward while current time is greater than target annotation time
-            while (anotate_index + 1 < len(msec_list)) and (curr_msec > msec_list[anotate_index]):
-                anotate_index += 1
-
-        # pick annotation if available, otherwise keep original frame
-        if anotate_index < total_annotations:
-            boxes, logits, phrases = raw_res[anotate_index]
-            annotated_rgb = annotate(frame_rgb, boxes, logits, phrases)
-        else:
-            annotated_rgb = frame_rgb
-
-        # lazy-init writer once we know frame size
         if writer is None:
-            h, w = int(annotated_rgb.shape[0]), int(annotated_rgb.shape[1])
+            h, w = annotated_frame.shape[:2]
             writer = cv2.VideoWriter(out_path, fourcc, float(fps), (w, h))
 
-        # convert back to BGR for OpenCV writer and write
-        annotated_bgr = cv2.cvtColor(annotated_rgb, cv2.COLOR_RGB2BGR)
-        writer.write(annotated_bgr)
+        writer.write(annotated_frame)
+        frame_idx += 1
 
+    capture.release()
     if writer is not None:
         writer.release()
-    vid.release()
+
+    return out_path
 
