@@ -421,7 +421,7 @@ class Compose(object):
 
     def __call__(self, vid:VidTensor):
         for t in self.transforms:
-            vid.vid_tensor = t(vid)
+            vid = t(vid)
         return vid
 
     def __repr__(self):
@@ -431,34 +431,3 @@ class Compose(object):
             format_string += "    {0}".format(t)
         format_string += "\n)"
         return format_string
-
-
-# python main.py
-# FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
-# UserWarning: Failed to load custom C++ ops. Running on CPU mode Only!
-# UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\TensorShape.cpp:4324.)
-# final text_encoder_type: bert-base-uncased
-# Shrink FPS from 30.0 FPS to 6 retaining 128 frames while dropping 510 frames
-# Traceback (most recent call last):
-#   File "C:\Users\jason\Docs\programming-project\AI\natural-language-video-event-query\main.py", line 13, in <module>
-#     video_formated = load_frame_formated(video_formated) # format for GDino compatiblity
-#                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-#   File "C:\Users\jason\miniconda3\envs\nlvideo\Lib\site-packages\torch\utils\_contextlib.py", line 120, in decorate_context
-#     return func(*args, **kwargs)
-#            ^^^^^^^^^^^^^^^^^^^^^
-#   File "C:\Users\jason\Docs\programming-project\AI\natural-language-video-event-query\libs\preprocess.py", line 171, in load_frame_formated
-#     frames_transformed = transform(vid)
-#                          ^^^^^^^^^^^^^^
-#   File "C:\Users\jason\Docs\programming-project\AI\natural-language-video-event-query\libs\frame_enhancement.py", line 403, in __call__
-#     vid.vid_tensor = t(vid)
-#                      ^^^^^^
-#   File "C:\Users\jason\Docs\programming-project\AI\natural-language-video-event-query\libs\frame_enhancement.py", line 23, in __call__
-#     video_tchw.vid_tensor = self.adaptive_enhance_for_detection_TCHW(video_tchw.vid_tensor, self.ema_alpha, self.clahe_chunk)
-#                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-#   File "C:\Users\jason\miniconda3\envs\nlvideo\Lib\site-packages\torch\utils\_contextlib.py", line 120, in decorate_context
-#     return func(*args, **kwargs)
-#            ^^^^^^^^^^^^^^^^^^^^^
-#   File "C:\Users\jason\Docs\programming-project\AI\natural-language-video-event-query\libs\frame_enhancement.py", line 82, in adaptive_enhance_for_detection_TCHW
-#     assert video_tchw.ndim == 4, "Expected (T, C, H, W)"
-#            ^^^^^^^^^^^^^^^
-# AttributeError: 'VidTensor' object has no attribute 'ndim'
