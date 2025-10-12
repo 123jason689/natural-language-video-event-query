@@ -1,11 +1,11 @@
-from typing import Iterator, List, Tuple, Union, Literal
+from typing import Iterator, List, Tuple, Union, Literal, Optional
 
 import torch
 import math
 import cv2
 import numpy as np
-from .frame_enhancement import *
-from  .typings_ import VidTensor
+from .frame_enhancement import AutoEnhance, Resize, SavedToHistory, Normalize, Compose
+from .typings_ import FrameBatch
 
 def fps_scale_down_to_np_arr(vid_file: cv2.VideoCapture, fps: int, output_type: Literal['list', 'iter'] = 'list' ) -> Union[List[np.typing.ArrayLike], Iterator[np.typing.ArrayLike]]:
     """
@@ -158,18 +158,36 @@ def permute_THWC_to_TCHW(img_tensor:torch.Tensor)->torch.Tensor:
 
 ## input (B,H,W,C)
 @torch.inference_mode()
-def load_frame_formated(vid: VidTensor)->VidTensor:
-    transform = Compose(
-        [
-            FPSDownsample(6),
-            AutoEnhance(),
-            Resize(800, max_size=1333),
-            SavedToHistory("./history"), # saved the log before normalized
-            Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ]
-    )
-    frames_transformed = transform(vid)
-    return frames_transformed
+def load_frame_formated(
+    batch: FrameBatch,
+    *,
+    target_short_side: int = 800,
+    max_size: int = 1333,
+    save_history_dir: Optional[str] = None,
+) -> FrameBatch:
+    """Apply the standard preprocessing pipeline to a batch of frames."""
+
+    transforms: List = [
+        AutoEnhance(
+            ema_alpha=0.6,
+            use_gpu=False,
+            clahe_tile=8,
+            clahe_clip_default=2.0,
+            diag_short_side=256,
+            unsharp_sigma=1.5,
+            enable_median=True
+        ),
+        Resize(target_short_side, max_size=max_size),
+    ]
+
+    if save_history_dir:
+        history_name = f"pre_norm_batch_{batch.batch_id:04d}"
+        transforms.append(SavedToHistory(save_history_dir, file_name=history_name))
+
+    transforms.append(Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]))
+
+    transform = Compose(transforms)
+    return transform(batch)
 
 
         
