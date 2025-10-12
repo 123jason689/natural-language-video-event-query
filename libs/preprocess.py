@@ -168,7 +168,15 @@ def load_frame_formated(
     """Apply the standard preprocessing pipeline to a batch of frames."""
 
     transforms: List = [
-        AutoEnhance(),
+        AutoEnhance(
+            ema_alpha=0.6,
+            use_gpu=False,
+            clahe_tile=8,
+            clahe_clip_default=2.0,
+            diag_short_side=256,
+            unsharp_sigma=1.5,
+            enable_median=True
+        ),
         Resize(target_short_side, max_size=max_size),
     ]
 

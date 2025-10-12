@@ -66,7 +66,7 @@ class VidTensor(Iterator[FrameBatch]):
         self._width = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
 
         self.batch_size = int(batch_size)
-        self._batch_dtype = torch.float32 if load_device.type == "cpu" else torch.float16
+        self._batch_dtype = torch.uint8 if load_device.type == "cpu" else torch.float16
 
         self.fps = self._native_fps if (target_fps is None or target_fps <= 0 or self._native_fps <= 0) else min(
             float(target_fps), self._native_fps
