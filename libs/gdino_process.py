@@ -98,6 +98,67 @@ class Model:
             )
         return results
 
+    def predict_with_caption(
+        self,
+        frame_batch: FrameBatch,
+        caption: str,
+        box_threshold: float,
+        text_threshold: float,
+    ) -> List[DetectionResult]:
+        """
+        import cv2
+
+        image = cv2.imread(IMAGE_PATH)
+
+        model = Model(model_config_path=CONFIG_PATH, model_checkpoint_path=WEIGHTS_PATH)
+        detections = model.predict_with_caption(
+            image=image,
+            caption=CAPTION,
+            box_threshold=BOX_THRESHOLD,
+            text_threshold=TEXT_THRESHOLD
+        )
+
+
+        import supervision as sv
+
+        box_annotator = sv.BoxAnnotator()
+        annotated_image = box_annotator.annotate(scene=image, detections=detections)
+        """
+        processed_frames = frame_batch.frames.to(self.device, non_blocking=True)
+
+        results: List[DetectionResult] = []
+        source_h = int(frame_batch.height)
+        source_w = int(frame_batch.width)
+
+        for i in range(processed_frames.shape[0]):
+            boxes, logits, phrases = predict(
+                model=self.model,
+                image=processed_frames[i],
+                caption=caption,
+                box_threshold=box_threshold,
+                text_threshold=text_threshold,
+                device=self.device)
+            detections = Model.post_process_result(
+                source_h=source_h,
+                source_w=source_w,
+                boxes=boxes,
+                logits=logits,
+            )
+
+            results.append(
+                DetectionResult(
+                    frame_index=int(frame_batch.frame_indices[i].item()),
+                    timestamp_ms=float(frame_batch.timestamps_ms[i].item()),
+                    detections=detections,
+                    phrases=phrases,
+                    boxes_cxcywh=boxes.cpu(),
+                    logits=logits.cpu(),
+                )
+            )
+
+        return results
+    
+
     @staticmethod
     def post_process_result(
             source_h: int,
@@ -282,7 +343,6 @@ def save_to_dir_anotated(
     fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
     writer = None
 
-    # map frame index -> DetectionResult for quick lookup
     result_map = {res.frame_index: res for res in sorted(frame_results, key=lambda r: r.frame_index)}
 
     frame_idx = 0
@@ -291,12 +351,11 @@ def save_to_dir_anotated(
         if not ret:
             break
 
+        # frame is BGR from OpenCV. keep it BGR.
         annotated_frame = frame
         res = result_map.get(frame_idx)
         if res is not None:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            annotated_rgb = annotate(frame_rgb, res.boxes_cxcywh, res.logits, res.phrases)
-            annotated_frame = cv2.cvtColor(annotated_rgb, cv2.COLOR_RGB2BGR)
+            annotated_frame = annotate_bgr(frame, res.boxes_cxcywh, res.logits, res.phrases)
 
         if writer is None:
             h, w = annotated_frame.shape[:2]
@@ -310,4 +369,29 @@ def save_to_dir_anotated(
         writer.release()
 
     return out_path
+
+
+def annotate_bgr(image_bgr: np.ndarray,
+                 boxes: torch.Tensor,
+                 logits: torch.Tensor,
+                 phrases: List[str]) -> np.ndarray:
+    """
+    Draw boxes/labels on a BGR image and return BGR.
+    """
+    h, w, _ = image_bgr.shape
+
+    # boxes are cx,cy,w,h normalized? you already scale by w,h in your code
+    boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
+    xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+
+    detections = sv.Detections(xyxy=xyxy)
+    labels = [f"{p} {l:.2f}" for p, l in zip(phrases, logits)]
+
+    bbox_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.INDEX)
+    label_annotator = sv.LabelAnnotator(color_lookup=sv.ColorLookup.INDEX)
+
+    annotated = image_bgr.copy()
+    annotated = bbox_annotator.annotate(scene=annotated, detections=detections)
+    annotated = label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
+    return annotated
 

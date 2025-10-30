@@ -10,8 +10,8 @@ import time
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-VIDEO_PATH = "cam_footage.mp4"
-CLASSES = ["person white shirt", "chair"]
+VIDEO_PATH = "./sitting.mp4"
+CLASSES = ["person black jacket sitting on a chair"]
 BOX_THRESHOLD = 0.35
 TEXT_THRESHOLD = 0.25
 BATCH_SIZE = 16
@@ -48,9 +48,15 @@ def run_pipeline() -> None:
 		print(f"Took {(end_time - curr_time):.4f} seconds to complete Enhancement")
 
 		curr_time = time.perf_counter()
-		batch_results = model.predict_with_classes(
+		# batch_results = model.predict_with_classes(
+		# 	processed,
+		# 	CLASSES,
+		# 	BOX_THRESHOLD,
+		# 	TEXT_THRESHOLD,
+		# )
+		batch_results = model.predict_with_caption(
 			processed,
-			CLASSES,
+			CLASSES[0],
 			BOX_THRESHOLD,
 			TEXT_THRESHOLD,
 		)

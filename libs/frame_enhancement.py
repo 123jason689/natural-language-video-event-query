@@ -9,358 +9,409 @@ import numpy as np
 import cv2
 import time
 from pathlib import Path
-from typing import List, Union, Tuple, Optional
+from typing import List, Union, Tuple, Optional, Literal, Dict
 from .typings_ import FrameBatch
 
-class AutoEnhance:
-    """
-    Flexible auto-enhancement:
-      - CPU backend: per-frame, OpenCV-heavy (low RAM)
-      - GPU backend (CUDA/MPS): Kornia/Torch in chunked batches with AMP
+Op = Literal["median", "white_balance", "gamma", "clahe", "unsharp"]
 
-    Output: float32 (CPU) or chosen dtype (GPU), range [0,1], same (T,3,H,W).
+class AutoEnhanceSelective:
+    """
+    Selective video enhancement for tensors shaped (T,3,H,W), RGB, in [0,1] or uint8.
+    Only applies operations listed in `ops`, in that order.
+
+    Modes:
+      - auto_tune=True: parameters derived from lightweight diagnostics (EMA).
+      - auto_tune=False: uses fixed params you provide.
+
+    Ops:
+      - "median": median filter (3x3 or 5x5 when auto; fixed ksize otherwise)
+      - "white_balance": gray-world gains (auto) or fixed per-channel gains
+      - "gamma": gamma correction (auto from Ymean; fixed otherwise)
+      - "clahe": CLAHE on Y channel (auto from Ystd; fixed otherwise)
+      - "unsharp": unsharp mask + lerp (auto amount from sharp+noise; fixed otherwise)
+
+    GPU path is chunked to respect `max_gpu_pixels_per_batch` and uses AMP on CUDA.
+    Output dtype: float32 on CPU, `gpu_dtype` on GPU; range [0,1].
     """
 
     def __init__(
         self,
-        ema_alpha: float = 0.6,
+        ops: List[Op],
+        *,
+        auto_tune: bool = True,
+        ema_alpha: float = 0.85,
         use_gpu: bool = True,
-        gpu_dtype: torch.dtype = torch.float16,   # good default for CUDA
-        max_gpu_pixels_per_batch: int = 1280*720*4,  # cap VRAM via adaptive chunking
+        gpu_dtype: torch.dtype = torch.float16,
+        max_gpu_pixels_per_batch: int = 1280*720*4,
         clahe_tile: int = 8,
-        clahe_clip_default: float = 2.0,
+        # Fixed params used when auto_tune=False
+        fixed_params: Optional[Dict[str, float]] = None,
+        # Diagnostics scale
         diag_short_side: int = 256,
+        # Unsharp kernel sigma
         unsharp_sigma: float = 1.5,
-        enable_median: bool = True,
     ):
+        self.ops = list(ops)
+        self.auto_tune = bool(auto_tune)
         self.ema_alpha = float(ema_alpha)
         self.use_gpu = bool(use_gpu)
         self.gpu_dtype = gpu_dtype
         self.max_gpu_pixels_per_batch = int(max_gpu_pixels_per_batch)
         self.clahe_tile = int(clahe_tile)
-        self.clahe_clip_default = float(clahe_clip_default)
         self.diag_short_side = int(diag_short_side)
         self.unsharp_sigma = float(unsharp_sigma)
-        self.enable_median = bool(enable_median)
 
-        # CPU resources
-        self._clahe_cv = cv2.createCLAHE(clipLimit=self.clahe_clip_default,
+        self.fixed = {
+            # median
+            "median_ksize": 0,                # 0 disables
+            # white balance gains (r,g,b)
+            "wb_r": 1.0, "wb_g": 1.0, "wb_b": 1.0,
+            # gamma
+            "gamma": 1.0,
+            # clahe
+            "clahe_clip": 2.0,
+            # unsharp
+            "unsharp_amount": 0.5,
+        }
+        if fixed_params:
+            self.fixed.update({k: float(v) for k, v in fixed_params.items()})
+
+        self._wb_prev_bgr = None
+        self._wb_prev_rgb_t = None
+
+        # CPU helpers
+        self._clahe_cv = cv2.createCLAHE(clipLimit=self.fixed["clahe_clip"],
                                          tileGridSize=(self.clahe_tile, self.clahe_tile))
         self._gamma_val = None
         self._gamma_lut = None
 
-        # EMA state (scalars / small vectors)
+        # EMA state (kept tiny)
         self._ema_Ymean = None
         self._ema_Ystd  = None
         self._ema_sharp = None
         self._ema_noise = None
-        self._ema_wbgain = None  # np.float32[3] (B,G,R)
+        self._ema_wbgain = None  # np.float32[3] in BGR-order for CPU, tensor[3] RGB for GPU
 
-    def __call__(self, batch) -> "FrameBatch":
+    def __call__(self, batch):
         x = batch.frames  # (T,3,H,W)
-        device = x.device
-        want_gpu = (device.type != "cpu") and self.use_gpu
-
-        if want_gpu:
-            batch.frames = self._enhance_gpu(batch.frames)
+        if x.device.type != "cpu" and self.use_gpu:
+            batch.frames = self._enhance_gpu_selective(x)
         else:
-            batch.frames = self._enhance_cpu(batch.frames)
-
-        print("Frames Enhanced")
+            batch.frames = self._enhance_cpu_selective(x)
         return batch
-    
-    @torch.inference_mode()
-    def _downsample_for_diag(self, bgr_u8: np.ndarray, short_side: int = 256) -> np.ndarray:
-        h, w = bgr_u8.shape[:2]
-        scale = short_side / max(h, w)
-        if scale < 1.0:
-            return cv2.resize(bgr_u8, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
-        return bgr_u8
 
-    def _gamma_lut_u8(self, gamma: float) -> np.ndarray:
+    # ---------------- Internals: small utilities ---------------- #
+    @staticmethod
+    def _to_u8_frame(f: torch.Tensor) -> torch.Tensor:
+        if f.dtype == torch.uint8:
+            return f
+        if f.is_floating_point():
+            return (f.clamp(0,1) * 255.0).to(torch.uint8)
+        return f.clamp(0,255).to(torch.uint8)
+
+    @staticmethod
+    def _scale_for_diag(h: int, w: int, short_side: int) -> float:
+        return min(1.0, short_side / max(h, w))
+
+    @staticmethod
+    def _lut_gamma_u8(gamma: float) -> np.ndarray:
         inv = max(gamma, 1e-3)
         return (np.power(np.arange(256, dtype=np.float32)/255.0, 1.0/inv)*255.0).clip(0,255).astype(np.uint8)
 
-    # ---------------- CPU BACKEND (OpenCV per-frame) ---------------- #
+    def _ema(self, prev, cur):
+        if prev is None: return cur
+        return self.ema_alpha * cur + (1.0 - self.ema_alpha) * prev
+
+    # ---------------- CPU path ---------------- #
     @torch.inference_mode()
-    def _enhance_cpu(self, video_tchw: torch.Tensor) -> torch.Tensor:
+    def _enhance_cpu_selective(self, video_tchw: torch.Tensor) -> torch.Tensor:
         assert video_tchw.ndim == 4 and video_tchw.shape[1] == 3
         T, C, H, W = video_tchw.shape
         device = video_tchw.device
-
         out = torch.empty((T, C, H, W), dtype=torch.float32, device=device)
 
-        def ema(prev, cur):
-            if prev is None: return cur
-            return self.ema_alpha * cur + (1.0 - self.ema_alpha) * prev
+        need_noise  = ("median" in self.ops) or ("unsharp" in self.ops)
+        need_sharp  = ("unsharp" in self.ops)
+        need_Ymean  = ("gamma" in self.ops) and self.auto_tune
+        need_Ystd   = ("clahe" in self.ops) and self.auto_tune
+        need_wb     = ("white_balance" in self.ops)
 
         for i in range(T):
-            f = video_tchw[i]
-            if f.dtype != torch.uint8:
-                if f.is_floating_point():
-                    f = (f.clamp(0,1) * 255.0).to(torch.uint8)
-                else:
-                    f = f.clamp(0,255).to(torch.uint8)
-
+            f = self._to_u8_frame(video_tchw[i])
             rgb = f.permute(1,2,0).contiguous().cpu().numpy()
             bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
-            # Diagnostics
-            ds = self._downsample_for_diag(bgr, self.diag_short_side)
-            gray = cv2.cvtColor(ds, cv2.COLOR_BGR2GRAY)
-            sharp = cv2.Laplacian(gray, ddepth=cv2.CV_64F, ksize=3).var()
-            blur = cv2.GaussianBlur(ds, (3,3), 1.0)
-            noise = cv2.absdiff(ds, blur).mean()
+            # Diagnostics only if needed
+            if any([need_noise, need_sharp, need_Ymean, need_Ystd, need_wb]):
+                scale = self._scale_for_diag(*bgr.shape[:2], self.diag_short_side)
+                ds = cv2.resize(bgr, (int(bgr.shape[1]*scale), int(bgr.shape[0]*scale)),
+                                interpolation=cv2.INTER_AREA) if scale < 1.0 else bgr
 
-            ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
-            Y = ycrcb[...,0].astype(np.float32)/255.0
-            Ymean = float(Y.mean())
-            Ystd  = float(Y.std() + 1e-8)
+                if need_sharp or need_noise:
+                    gray = cv2.cvtColor(ds, cv2.COLOR_BGR2GRAY)
+                if need_sharp:
+                    sharp = cv2.Laplacian(gray, ddepth=cv2.CV_64F, ksize=3).var()
+                    self._ema_sharp = self._ema(self._ema_sharp, float(sharp))
+                if need_noise:
+                    blur = cv2.GaussianBlur(ds, (3,3), 1.0)
+                    noise = cv2.absdiff(ds, blur).mean()
+                    self._ema_noise = self._ema(self._ema_noise, float(noise))
 
-            self._ema_Ymean = ema(self._ema_Ymean, Ymean)
-            self._ema_Ystd  = ema(self._ema_Ystd,  Ystd)
-            self._ema_sharp = ema(self._ema_sharp, sharp)
-            self._ema_noise = ema(self._ema_noise, noise)
+                if need_Ymean or need_Ystd:
+                    ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
+                    Y = ycrcb[...,0].astype(np.float32)/255.0
+                    if need_Ymean:
+                        self._ema_Ymean = self._ema(self._ema_Ymean, float(Y.mean()))
+                    if need_Ystd:
+                        self._ema_Ystd  = self._ema(self._ema_Ystd,  float(Y.std() + 1e-8))
 
-            means = bgr.reshape(-1,3).mean(axis=0) + 1e-6  # B,G,R
-            g = means[1]
-            wbgain = np.array([g/means[0], 1.0, g/means[2]], dtype=np.float32)
-            self._ema_wbgain = wbgain if self._ema_wbgain is None else (
-                self.ema_alpha*wbgain + (1.0-self.ema_alpha)*self._ema_wbgain
-            )
+                if need_wb:
+                    means = bgr.reshape(-1,3).mean(axis=0) + 1e-6  # B,G,R
+                    g = means[1]
+                    gw = np.array([g/means[0], 1.0, g/means[2]], dtype=np.float32)
+                    self._ema_wbgain = gw if self._ema_wbgain is None else self._ema(self._ema_wbgain, gw)
 
-            # Params
-            if self._ema_Ymean < 0.22: gamma = 0.70
-            elif self._ema_Ymean < 0.35: gamma = 0.80
-            elif self._ema_Ymean < 0.55: gamma = 0.90
-            else: gamma = 1.00
+            # Apply only requested ops, in order
+            for op in self.ops:
+                if op == "median":
+                    k = 0
+                    if self.auto_tune:
+                        if self._ema_noise is not None and self._ema_noise > 0.06*255: k = 5
+                        elif self._ema_noise is not None and self._ema_noise > 0.035*255: k = 3
+                    else:
+                        k = int(self.fixed["median_ksize"])
+                    if k in (3,5):
+                        bgr = cv2.medianBlur(bgr, k)
 
-            if self._ema_Ystd < 0.05: clahe_clip = 3.5
-            elif self._ema_Ystd < 0.08: clahe_clip = 2.5
-            elif self._ema_Ystd < 0.12: clahe_clip = 1.8
-            else: clahe_clip = 1.2
-            self._clahe_cv.setClipLimit(clahe_clip)
+                elif op == "white_balance":
+                    # 1) choose target gains in BGR order
+                    if self.auto_tune and self._ema_wbgain is not None:
+                        gains = self._ema_wbgain.astype(np.float32)  # B,G,R from diagnostics
+                    else:
+                        gains = np.array(
+                            [self.fixed["wb_b"], self.fixed["wb_g"], self.fixed["wb_r"]],
+                            dtype=np.float32
+                        )
 
-            if self.enable_median:
-                if self._ema_noise > 0.06*255: med = 5
-                elif self._ema_noise > 0.035*255: med = 3
-                else: med = 0
-                if med in (3,5): bgr = cv2.medianBlur(bgr, med)
+                    # 2) absolute clamp to keep colors sane under colored lights
+                    gains = np.clip(gains, 0.7, 1.3)
 
-            # WB
-            bgr = np.clip(bgr.astype(np.float32) * self._ema_wbgain[None,None,:], 0, 255).astype(np.uint8)
+                    # 3) slew-rate limit vs previous frame to prevent hue flipping
+                    prev = getattr(self, "_wb_prev_bgr", None)
+                    if prev is not None:
+                        max_step = 0.05  # allow at most ±5% change per frame
+                        lo = prev * (1.0 - max_step)
+                        hi = prev * (1.0 + max_step)
+                        gains = np.clip(gains, lo, hi)
 
-            # Gamma LUT
-            if self._gamma_val != gamma:
-                self._gamma_lut = self._gamma_lut_u8(gamma)
-                self._gamma_val = gamma
-            bgr = cv2.LUT(bgr, self._gamma_lut)
+                    # 4) apply and stash for next time
+                    bgr = np.clip(bgr.astype(np.float32) * gains[None, None, :], 0, 255).astype(np.uint8)
+                    self._wb_prev_bgr = gains
 
-            # CLAHE on Y
-            ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
-            y = ycrcb[...,0]
-            y[:] = self._clahe_cv.apply(y)
-            bgr = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+                elif op == "gamma":
+                    if self.auto_tune and self._ema_Ymean is not None:
+                        Ym = self._ema_Ymean
+                        if Ym < 0.22: gamma = 0.70
+                        elif Ym < 0.35: gamma = 0.80
+                        elif Ym < 0.55: gamma = 0.90
+                        else: gamma = 1.00
+                    else:
+                        gamma = float(self.fixed["gamma"])
+                    if self._gamma_val != gamma:
+                        self._gamma_lut = self._lut_gamma_u8(gamma)
+                        self._gamma_val = gamma
+                    bgr = cv2.LUT(bgr, self._gamma_lut)
 
-            # Unsharp
-            blurred = cv2.GaussianBlur(bgr, (0,0), sigmaX=self.unsharp_sigma, sigmaY=self.unsharp_sigma)
-            # usm amount from sharp/noise
-            base = 0.9 if self._ema_sharp < 0.002 else (0.7 if self._ema_sharp < 0.006 else 0.5)
-            noise_pen = min(max(self._ema_noise/(0.08*255), 0.0), 1.0) * 0.4
-            usm_amount = float(np.clip(base - noise_pen, 0.3, 1.0))
-            bgr = cv2.addWeighted(bgr, 1.0 + usm_amount, blurred, -usm_amount, 0)
+                elif op == "clahe":
+                    if self.auto_tune and self._ema_Ystd is not None:
+                        Ys = self._ema_Ystd
+                        if Ys < 0.05: clip = 3.5
+                        elif Ys < 0.08: clip = 2.5
+                        elif Ys < 0.12: clip = 1.8
+                        else: clip = 1.2
+                    else:
+                        clip = float(self.fixed["clahe_clip"])
+                    self._clahe_cv.setClipLimit(clip)
+                    ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
+                    y = ycrcb[...,0]
+                    y[:] = self._clahe_cv.apply(y)
+                    bgr = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
 
-            # back to torch float32 [0,1]
+                elif op == "unsharp":
+                    # form sharpened version once, then lerp by amount
+                    blurred = cv2.GaussianBlur(bgr, (0,0), sigmaX=self.unsharp_sigma, sigmaY=self.unsharp_sigma)
+                    if self.auto_tune:
+                        base = 0.9 if (self._ema_sharp or 0) < 0.002 else (0.7 if (self._ema_sharp or 0) < 0.006 else 0.5)
+                        noise_pen = min(max((self._ema_noise or 0)/(0.08*255), 0.0), 1.0) * 0.4
+                        a = float(np.clip(base - noise_pen, 0.0, 1.0))
+                    else:
+                        a = float(self.fixed["unsharp_amount"])
+                    bgr = cv2.addWeighted(bgr, 1.0 + a, blurred, -a, 0)
+
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             rgb_f = torch.from_numpy(rgb).to(dtype=torch.float32, device=device).permute(2,0,1) / 255.0
             out[i].copy_(rgb_f)
 
         return out
 
-    # ---------------- GPU BACKEND (Torch/Kornia, chunked) ---------------- #
+    # ---------------- GPU path ---------------- #
     @torch.inference_mode()
-    def _enhance_gpu(self, video_tchw: torch.Tensor) -> torch.Tensor:
-        """
-        Chunked GPU pipeline to limit VRAM:
-          - Keeps uint8 until normalization stage if input is uint8
-          - AMP to reduce VRAM/boost throughput
-          - CLAHE via Kornia per-frame but batched
-        """
+    def _enhance_gpu_selective(self, video_tchw: torch.Tensor) -> torch.Tensor:
         assert video_tchw.ndim == 4 and video_tchw.shape[1] == 3
         device = video_tchw.device
         T, C, H, W = video_tchw.shape
 
-        # Decide chunk size from pixel budget
         pixels_per_frame = H * W
         max_frames = max(1, self.max_gpu_pixels_per_batch // max(1, pixels_per_frame))
-        Bchunk = min(max_frames, 32)  # soft cap
+        Bchunk = min(max_frames, 32)
 
-        # Output dtype (float16/float32) on GPU in [0,1]
         out_dtype = self.gpu_dtype if device.type != "cpu" else torch.float32
         out = torch.empty((T, C, H, W), dtype=out_dtype, device=device)
 
-        # Tiny EMA states (torch tensors to keep on device)
+        need_noise  = ("median" in self.ops) or ("unsharp" in self.ops)
+        need_sharp  = ("unsharp" in self.ops)
+        need_Ymean  = ("gamma" in self.ops) and self.auto_tune
+        need_Ystd   = ("clahe" in self.ops) and self.auto_tune
+        need_wb     = ("white_balance" in self.ops)
+
+        use_amp = (device.type == "cuda")
+
+        # tiny EMA tensors on device
         ema_Ymean = None
         ema_Ystd  = None
         ema_sharp = None
         ema_noise = None
-        ema_wbgain = None  # (3,)
+        ema_wbg   = None  # (3,)
 
-        def ema(prev, cur, alpha: float):
+        def ema_t(prev, cur):
             if prev is None: return cur
-            return alpha * cur + (1.0 - alpha) * prev
-
-        # Autocast for mixed precision on CUDA/MPS
-        use_amp = (device.type == "cuda")
+            return self.ema_alpha * cur + (1.0 - self.ema_alpha) * prev
 
         for s in range(0, T, Bchunk):
             e = min(s + Bchunk, T)
-            xb = video_tchw[s:e]  # (B,3,H,W) possibly uint8
+            xb0 = video_tchw[s:e]
 
-            # ---- keep uint8 until needed ----
-            if xb.dtype == torch.uint8:
-                x_float = xb.to(out_dtype) / 255.0
+            if xb0.dtype == torch.uint8:
+                xb = xb0.to(out_dtype) / 255.0
             else:
-                x_float = xb.to(out_dtype)
-                if float(x_float.max()) > 1.5:
-                    x_float = (x_float / 255.0)
+                xb = xb0.to(out_dtype)
+                if float(xb.max()) > 1.5:
+                    xb = xb / 255.0
 
             with torch.autocast(device_type='cuda', dtype=self.gpu_dtype, enabled=use_amp):
-                # Diagnostics on downsampled frames to save VRAM
-                # Use bilinear downscale to diag_short_side
-                short = self.diag_short_side
-                scale = short / max(H, W)
-                if scale < 1.0:
-                    h2, w2 = int(H*scale), int(W*scale)
-                    x_small = F.interpolate(x_float, size=(h2, w2), mode="bilinear", align_corners=False)
-                else:
-                    x_small = x_float
+                # Diagnostics only if needed
+                if any([need_noise, need_sharp, need_Ymean, need_Ystd, need_wb]):
+                    short = self.diag_short_side
+                    scale = min(1.0, short / max(H, W))
+                    x_small = F.interpolate(xb, size=(int(H*scale), int(W*scale)), mode="bilinear", align_corners=False) if scale < 1.0 else xb
 
-                ycb_small = K.color.rgb_to_ycbcr(x_small)
-                Y_small = ycb_small[:, :1]
-                Ymean = Y_small.mean(dim=(2,3))  # (B,1)
-                Ystd  = Y_small.std(dim=(2,3)) + 1e-8
+                    if need_Ymean or need_Ystd:
+                        ycb_s = K.color.rgb_to_ycbcr(x_small)
+                        Y_s = ycb_s[:, :1]
+                        Ym = Y_s.mean(dim=(2,3))  # (B,1)
+                        Ys = Y_s.std(dim=(2,3)) + 1e-8
 
-                # sharpness via Laplacian var
-                lap = KF.laplacian(Y_small, kernel_size=3)
-                sharp = (lap**2).mean(dim=(2,3))  # (B,1)
+                    if need_sharp:
+                        lap = KF.laplacian((x_small[:, :1] if x_small.shape[1] == 1 else K.color.rgb_to_grayscale(x_small)), kernel_size=3)
+                        Sh = (lap**2).mean(dim=(2,3))  # (B,1)
+                    if need_noise:
+                        blur = KF.gaussian_blur2d(x_small, (3,3), (1.0,1.0))
+                        Nl = (x_small - blur).abs().mean(dim=(1,2,3), keepdim=True)  # (B,1)
 
-                # noise proxy
-                blur = KF.gaussian_blur2d(x_small, (3,3), (1.0,1.0))
-                noise = (x_small - blur).abs().mean(dim=(1,2,3), keepdim=True)  # (B,1)
+                    if need_wb:
+                        means = xb.mean(dim=(2,3))  # (B,3) RGB
+                        g = means[:,1:2]
+                        Wbg = (g / (means + 1e-6)).clamp(0.6, 1.6)  # (B,3) RGB
 
-                # gray-world gains from full-res (cheap means)
-                means = x_float.mean(dim=(2,3))  # (B,3) RGB
-                # convert to BGR-like logic: use G as pivot (channel 1)
-                mG = means[:,1:2]
-                wb_gain = (mG / (means + 1e-6)).clamp(0.6, 1.6)  # (B,3)
+                    # fold into EMA per item
+                    B = xb.shape[0]
+                    if need_Ymean:  # overwrite with most recent EMA per frame
+                        for i in range(B):
+                            ema_Ymean = ema_t(ema_Ymean, Ym[i:i+1])
+                    if need_Ystd:
+                        for i in range(B):
+                            ema_Ystd  = ema_t(ema_Ystd,  Ys[i:i+1])
+                    if need_sharp:
+                        for i in range(B):
+                            ema_sharp = ema_t(ema_sharp, Sh[i:i+1])
+                    if need_noise:
+                        for i in range(B):
+                            ema_noise = ema_t(ema_noise, Nl[i:i+1])
+                    if need_wb:
+                        for i in range(B):
+                            ema_wbg   = ema_t(ema_wbg,   Wbg[i:i+1])
 
-                # EMA per-frame within chunk
-                B = x_float.shape[0]
-                Ymean_s = torch.empty_like(Ymean)
-                Ystd_s  = torch.empty_like(Ystd)
-                sharp_s = torch.empty_like(sharp)
-                noise_s = torch.empty_like(noise)
-                wbg_s   = torch.empty_like(wb_gain)
+                # Apply only requested ops, in order
+                x = xb
+                for op in self.ops:
+                    if op == "median":
+                        if self.auto_tune and ema_noise is not None:
+                            k = 5 if float(ema_noise.item()) > 0.06 else (3 if float(ema_noise.item()) > 0.035 else 0)
+                        else:
+                            k = int(self.fixed["median_ksize"])
+                        if k in (3,5):
+                            x = KF.median_blur(x, (k,k))
 
-                for i in range(B):
-                    Ym  = Ymean[i:i+1]  # (1,1)
-                    Ys  = Ystd[i:i+1]
-                    Sh  = sharp[i:i+1]
-                    Nl  = noise[i:i+1]
-                    Wbg = wb_gain[i:i+1]  # (1,3)
+                    elif op == "white_balance":
+                        # 1) pick target gains (RGB order on GPU)
+                        if self.auto_tune and ema_wbg is not None:
+                            gains = ema_wbg.view(1, 3, 1, 1).to(x.dtype)
+                        else:
+                            gains = torch.tensor(
+                                [self.fixed["wb_r"], self.fixed["wb_g"], self.fixed["wb_b"]],
+                                dtype=x.dtype, device=x.device
+                            ).view(1, 3, 1, 1)
 
-                    ema_Ymean = ema(ema_Ymean, Ym, self.ema_alpha)
-                    ema_Ystd  = ema(ema_Ystd,  Ys, self.ema_alpha)
-                    ema_sharp = ema(ema_sharp, Sh, self.ema_alpha)
-                    ema_noise = ema(ema_noise, Nl, self.ema_alpha)
-                    ema_wbgain = ema(ema_wbgain, Wbg, self.ema_alpha)
+                        # 2) clamp absolute range to avoid color overcorrection
+                        gains = gains.clamp(0.7, 1.3)
 
-                    Ymean_s[i:i+1] = ema_Ymean
-                    Ystd_s[i:i+1]  = ema_Ystd
-                    sharp_s[i:i+1] = ema_sharp
-                    noise_s[i:i+1] = ema_noise
-                    wbg_s[i:i+1]   = ema_wbgain
+                        # 3) slew-rate limit vs previous applied gains
+                        prev = getattr(self, "_wb_prev_rgb_t", None)
+                        if prev is not None:
+                            max_step = 0.05  # allow ±5% change per frame
+                            lo = prev * (1.0 - max_step)
+                            hi = prev * (1.0 + max_step)
+                            gains = torch.max(torch.min(gains, hi), lo)
 
-                # Params from EMA
-                gamma = torch.where(
-                    Ymean_s < 0.22, torch.full_like(Ymean_s, 0.70),
-                    torch.where(
-                        Ymean_s < 0.35, torch.full_like(Ymean_s, 0.80),
-                        torch.where(Ymean_s < 0.55, torch.full_like(Ymean_s, 0.90),
-                                    torch.full_like(Ymean_s, 1.00))
-                    )
-                )  # (B,1)
+                        # 4) apply and store for next batch
+                        x = (x * gains).clamp_(0, 1)
+                        self._wb_prev_rgb_t = gains.detach()
 
-                clahe_clip = torch.where(
-                    Ystd_s < 0.05, torch.full_like(Ystd_s, 3.5),
-                    torch.where(
-                        Ystd_s < 0.08, torch.full_like(Ystd_s, 2.5),
-                        torch.where(Ystd_s < 0.12, torch.full_like(Ystd_s, 1.8),
-                                    torch.full_like(Ystd_s, 1.2))
-                    )
-                )  # (B,1)
+                    elif op == "gamma":
+                        if self.auto_tune and ema_Ymean is not None:
+                            Ym = float(ema_Ymean.item())
+                            gamma = 0.70 if Ym < 0.22 else (0.80 if Ym < 0.35 else (0.90 if Ym < 0.55 else 1.00))
+                        else:
+                            gamma = float(self.fixed["gamma"])
+                        x = torch.pow(x.clamp(0,1), torch.tensor(gamma, dtype=x.dtype, device=x.device))
 
-                # Median selection
-                if self.enable_median:
-                    ksize = torch.where(
-                        noise_s > 0.06, torch.full_like(noise_s, 5.0),
-                        torch.where(noise_s > 0.035, torch.full_like(noise_s, 3.0),
-                                    torch.full_like(noise_s, 0.0))
-                    ).squeeze(1)  # (B,)
-                else:
-                    ksize = torch.zeros((x_float.shape[0],), device=device, dtype=x_float.dtype)
+                    elif op == "clahe":
+                        if self.auto_tune and ema_Ystd is not None:
+                            Ys = float(ema_Ystd.item())
+                            clip = 3.5 if Ys < 0.05 else (2.5 if Ys < 0.08 else (1.8 if Ys < 0.12 else 1.2))
+                        else:
+                            clip = float(self.fixed["clahe_clip"])
+                        ycb = K.color.rgb_to_ycbcr(x)
+                        Y = ycb[:, :1]
+                        Yeq = KE.equalize_clahe(Y, clip_limit=clip, grid_size=(self.clahe_tile, self.clahe_tile))
+                        x = K.color.ycbcr_to_rgb(torch.cat([Yeq, ycb[:,1:]], dim=1))
 
-                # Unsharp amount
-                base = torch.where(sharp_s < 0.002, torch.full_like(sharp_s, 0.9),
-                                   torch.where(sharp_s < 0.006, torch.full_like(sharp_s, 0.7),
-                                               torch.full_like(sharp_s, 0.5)))
-                noise_pen = (noise_s.clamp(0, 0.08) / 0.08) * 0.4
-                usm_amount = (base - noise_pen).clamp(0.3, 1.0).to(x_float.dtype)  # (B,1)
+                    elif op == "unsharp":
+                        sharpened = KF.unsharp_mask(x, kernel_size=(5,5),
+                                                    sigma=(self.unsharp_sigma,self.unsharp_sigma),
+                                                    border_type='reflect')
+                        if self.auto_tune:
+                            base = 0.9 if (float(ema_sharp.item()) if ema_sharp is not None else 0) < 0.002 \
+                                   else (0.7 if (float(ema_sharp.item()) if ema_sharp is not None else 0) < 0.006 else 0.5)
+                            noise_pen = min(max((float(ema_noise.item()) if ema_noise is not None else 0)/0.08, 0.0), 1.0) * 0.4
+                            a = max(0.0, min(1.0, base - noise_pen))
+                        else:
+                            a = float(self.fixed["unsharp_amount"])
+                        x = torch.lerp(x, sharpened, torch.tensor(a, dtype=x.dtype, device=x.device)).clamp_(0,1)
 
-                # --- apply ---
-                xb = x_float
+                out[s:e].copy_(x.to(out_dtype))
 
-                # 1) median per index (avoid big masks)
-                if self.enable_median:
-                    idx3 = (ksize == 3).nonzero(as_tuple=False).squeeze(1)
-                    idx5 = (ksize == 5).nonzero(as_tuple=False).squeeze(1)
-                    if idx3.numel():
-                        xb[idx3] = KF.median_blur(xb[idx3], (3,3))
-                    if idx5.numel():
-                        xb[idx5] = KF.median_blur(xb[idx5], (5,5))
-
-                # 2) gray-world WB
-                gains = wbg_s.view(-1,3,1,1).to(xb.dtype)
-                xb = (xb * gains).clamp_(0,1)
-
-                # 3) gamma
-                gamma_b = gamma.to(xb.dtype).view(-1,1,1,1)
-                xb = torch.pow(xb.clamp(0,1), gamma_b)
-
-                # 4) CLAHE per frame (batched loop to keep VRAM bounded)
-                # Kornia's CLAHE expects (B,1,H,W); do Y channel round-trip
-                ycb = K.color.rgb_to_ycbcr(xb)
-                Y = ycb[:, :1]
-                out_frames = []
-                for i in range(xb.shape[0]):
-                    clip = float(clahe_clip[i,0].item())
-                    Yi = KE.equalize_clahe(Y[i:i+1], clip_limit=clip, grid_size=(self.clahe_tile, self.clahe_tile))
-                    x_rgb = K.color.ycbcr_to_rgb(torch.cat([Yi, ycb[i:i+1,1:]], dim=1))
-                    out_frames.append(x_rgb)
-                xb = torch.cat(out_frames, dim=0)
-
-                # 5) unsharp + lerp
-                sharp_fixed = KF.unsharp_mask(
-                    xb, kernel_size=(5,5), sigma=(self.unsharp_sigma,self.unsharp_sigma), border_type='reflect'
-                )
-                a = usm_amount.to(xb.dtype).view(-1,1,1,1)
-                xb = torch.lerp(xb, sharp_fixed, a).clamp_(0,1)
-
-            out[s:e].copy_(xb.to(out_dtype))
-
-            # free temps between chunks
-            del x_float, x_small, ycb_small, Y_small, lap, blur, means, wb_gain
+            del xb0, xb
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 

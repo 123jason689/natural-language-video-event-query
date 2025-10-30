@@ -4,7 +4,7 @@ import torch
 import math
 import cv2
 import numpy as np
-from .frame_enhancement import AutoEnhance, Resize, SavedToHistory, Normalize, Compose
+from .frame_enhancement import AutoEnhanceSelective, Resize, SavedToHistory, Normalize, Compose
 from .typings_ import FrameBatch
 
 def fps_scale_down_to_np_arr(vid_file: cv2.VideoCapture, fps: int, output_type: Literal['list', 'iter'] = 'list' ) -> Union[List[np.typing.ArrayLike], Iterator[np.typing.ArrayLike]]:
@@ -168,14 +168,13 @@ def load_frame_formated(
     """Apply the standard preprocessing pipeline to a batch of frames."""
 
     transforms: List = [
-        AutoEnhance(
-            ema_alpha=0.6,
+        AutoEnhanceSelective(
+            ops=["median", 'white_balance', 'gamma', 'unsharp'],
+            ema_alpha=0.25,
             use_gpu=False,
             clahe_tile=8,
-            clahe_clip_default=2.0,
             diag_short_side=256,
-            unsharp_sigma=1.5,
-            enable_median=True
+            unsharp_sigma=1.5
         ),
         Resize(target_short_side, max_size=max_size),
     ]
