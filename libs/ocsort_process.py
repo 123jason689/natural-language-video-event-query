@@ -2,6 +2,7 @@ from .gdino_process import DetectionResult
 import numpy as np
 import supervision as sv
 from typing import List, Dict
+from .ocsort.ocsort import OCSort
 
 def _sv_to_ocsort_array(
     detections: sv.Detections,
@@ -59,3 +60,5 @@ def _sv_to_ocsort_array(
             cls = np.full((boxes.shape[0],), default_class_id, dtype=int)
 
     return np.hstack([boxes, scores[:, None], cls[:, None]])
+
+## parsing DetectionResult to OC-Sort input compatible format

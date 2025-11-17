@@ -190,36 +190,35 @@ class OCSort(object):
         self.use_byte = use_byte
         KalmanBoxTracker.count = 0
 
+    #### Not original from noahcao/OC_SORT/tree/master/trackers/ocsort_tracker
+    #### eddited to fit the needs to have the class idx passed through
     def update(self, output_results, img_info, img_size):
         """
         Params:
-          dets - a numpy array of detections in the format [[x1,y1,x2,y2,score],[x1,y1,x2,y2,score],...]
-        Requires: this method must be called once for each frame even with empty detections (use np.empty((0, 5)) for frames without detections).
+          dets - a numpy array of detections in the format [[x1,y1,x2,y2,score, class_id],[x1,y1,x2,y2,score, class_id],...]
+        Requires: this method must be called once for each frame even with empty detections (use np.empty((0, 7)) for frames without detections).
         Returns the a similar array, where the last column is the object ID.
         NOTE: The number of objects returned may differ from the number of detections provided.
         """
         if output_results is None:
-            return np.empty((0, 5))
+            return np.empty((0, 7))
 
         self.frame_count += 1
         # post_process detections
-        if output_results.shape[1] == 5:
-            scores = output_results[:, 4]
-            bboxes = output_results[:, :4]
-        else:
-            output_results = output_results.cpu().numpy()
-            scores = output_results[:, 4] * output_results[:, 5]
-            bboxes = output_results[:, :4]  # x1y1x2y2
+        if not output_results.shape[1] == 6:
+            return np.empty((0, 7))
+        
+        scores = output_results[:, 4]
+        bboxes = output_results[:, :4]
         img_h, img_w = img_info[0], img_info[1]
         scale = min(img_size[0] / float(img_h), img_size[1] / float(img_w))
         bboxes /= scale
-        dets = np.concatenate((bboxes, np.expand_dims(scores, axis=-1)), axis=1)
         inds_low = scores > 0.1
-        inds_high = scores < self.det_thresh
+        inds_high = scores< self.det_thresh
         inds_second = np.logical_and(inds_low, inds_high)  # self.det_thresh > score > 0.1, for second matching
-        dets_second = dets[inds_second]  # detections for second matching
-        remain_inds = scores > self.det_thresh
-        dets = dets[remain_inds]
+        dets_second = output_results[inds_second]  # detections for second matching
+        remain_inds = scores> self.det_thresh
+        dets = output_results[remain_inds]
 
         # get predicted locations from existing trackers.
         trks = np.zeros((len(self.trackers), 5))
@@ -241,12 +240,15 @@ class OCSort(object):
             [k_previous_obs(trk.observations, trk.age, self.delta_t) for trk in self.trackers])
 
         """
-            First round of association
+            First round of association,
+            associate returns matched (2d arr conatining [detection_idx, which_track_or_object_idx])
+            unmatched_dets = 1d array of detections indices that doesn't have tracks
+            unmatched_trks = 1d array of indices of tracks that doesn't have an associated detections
         """
         matched, unmatched_dets, unmatched_trks = associate(
             dets, trks, self.iou_threshold, velocities, k_observations, self.inertia)
         for m in matched:
-            self.trackers[m[1]].update(dets[m[0], :])
+            self.trackers[m[1]].update(dets[m[0], : ])
 
         """
             Second round of associaton by OCR
@@ -268,7 +270,7 @@ class OCSort(object):
                     det_ind, trk_ind = m[0], unmatched_trks[m[1]]
                     if iou_left[m[0], m[1]] < self.iou_threshold:
                         continue
-                    self.trackers[trk_ind].update(dets_second[det_ind, :])
+                    self.trackers[trk_ind].update(dets_second[det_ind, : ])
                     to_remove_trk_indices.append(trk_ind)
                 unmatched_trks = np.setdiff1d(unmatched_trks, np.array(to_remove_trk_indices))
 
@@ -301,7 +303,7 @@ class OCSort(object):
 
         # create and initialise new trackers for unmatched detections
         for i in unmatched_dets:
-            trk = KalmanBoxTracker(dets[i, :], delta_t=self.delta_t)
+            trk = KalmanBoxTracker(dets[i, : ], delta_t=self.delta_t)
             self.trackers.append(trk)
         i = len(self.trackers)
         for trk in reversed(self.trackers):

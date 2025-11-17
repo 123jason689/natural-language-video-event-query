@@ -11,7 +11,7 @@ from groundingdino.util.inference import annotate, load_model, predict
 from torchvision.ops import box_convert
 
 from .typings_ import FrameBatch
-
+from .ocsort.ocsort import OCSort
 
 @dataclass
 class DetectionResult:
@@ -104,6 +104,7 @@ class Model:
         caption: str,
         box_threshold: float,
         text_threshold: float,
+        ocsort_model: OCSort
     ) -> List[DetectionResult]:
         """
         import cv2
@@ -143,6 +144,7 @@ class Model:
                 source_w=source_w,
                 boxes=boxes,
                 logits=logits,
+                ocsort = ocsort_model
             )
 
             results.append(
@@ -164,11 +166,17 @@ class Model:
             source_h: int,
             source_w: int,
             boxes: torch.Tensor,
-            logits: torch.Tensor
+            logits: torch.Tensor,
+            ocsort: OCSort
     ) -> sv.Detections:
         boxes = boxes * torch.Tensor([source_w, source_h, source_w, source_h])
         xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
         confidence = logits.numpy()
+        phrase_class_idx = torch.range(0, xyxy.shape[0]).numpy()
+        out = np.column_stack([xyxy, confidence, phrase_class_idx])
+        ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
+        ## oc sort outputs (x,y,x,y,object_id)
+        
         return sv.Detections(xyxy=xyxy, confidence=confidence)
 
     @staticmethod

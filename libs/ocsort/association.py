@@ -7,7 +7,7 @@ def iou_batch(bboxes1, bboxes2):
     From SORT: Computes IOU between two bboxes in the form [x1,y1,x2,y2]
     """
     bboxes2 = np.expand_dims(bboxes2, 0)
-    bboxes1 = np.expand_dims(bboxes1, 1)
+    bboxes1 = np.expand_dims(bboxes1[:,:4], 1) ### changed to only get the xyxy
     
     xx1 = np.maximum(bboxes1[..., 0], bboxes2[..., 0])
     yy1 = np.maximum(bboxes1[..., 1], bboxes2[..., 1])
@@ -258,7 +258,7 @@ def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc
     valid_mask[np.where(previous_obs[:,4]<0)] = 0
     
     iou_matrix = iou_batch(detections, trackers)
-    scores = np.repeat(detections[:,-1][:, np.newaxis], trackers.shape[0], axis=1)
+    scores = np.repeat(detections[:,4][:, np.newaxis], trackers.shape[0], axis=1)
     # iou_matrix = iou_matrix * scores # a trick sometiems works, we don't encourage this
     valid_mask = np.repeat(valid_mask[:, np.newaxis], X.shape[1], axis=1)
 
