@@ -48,18 +48,21 @@ def run_pipeline() -> None:
 		print(f"Took {(end_time - curr_time):.4f} seconds to complete Enhancement")
 
 		curr_time = time.perf_counter()
+
 		# batch_results = model.predict_with_classes(
 		# 	processed,
 		# 	CLASSES,
 		# 	BOX_THRESHOLD,
 		# 	TEXT_THRESHOLD,
 		# )
+		
 		batch_results = model.predict_with_caption(
 			processed,
 			CLASSES[0],
 			BOX_THRESHOLD,
 			TEXT_THRESHOLD,
 		)
+
 		all_results.extend(batch_results)
 		end_time = time.perf_counter()
 		print(f"Took {(end_time - curr_time):.4f} seconds to complete GDINO Detection")
