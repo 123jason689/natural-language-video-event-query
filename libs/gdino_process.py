@@ -174,10 +174,10 @@ class Model:
         confidence = logits.numpy()
         phrase_class_idx = torch.range(0, xyxy.shape[0]).numpy()
         out = np.column_stack([xyxy, confidence, phrase_class_idx])
-        ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
-        ## oc sort outputs (x,y,x,y,object_id)
+        oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
+        ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
         
-        return sv.Detections(xyxy=xyxy, confidence=confidence)
+        return sv.Detections(xyxy=oc_outputs[:, : 4], confidence=oc_outputs[:, 4], class_id=oc_outputs[:, 5], tracker_id=oc_outputs[:, 6])
 
     @staticmethod
     def phrases2classes(phrases: List[str], classes: List[str]) -> np.ndarray:
