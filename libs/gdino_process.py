@@ -172,7 +172,7 @@ class Model:
         boxes = boxes * torch.Tensor([source_w, source_h, source_w, source_h])
         xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
         confidence = logits.numpy()
-        phrase_class_idx = torch.range(0, xyxy.shape[0]).numpy()
+        phrase_class_idx = np.arange(xyxy.shape[0])
         out = np.column_stack([xyxy, confidence, phrase_class_idx])
         oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
         ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
