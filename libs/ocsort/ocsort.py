@@ -9,7 +9,7 @@ from .association import *
 
 def k_previous_obs(observations, cur_age, k):
     if len(observations) == 0:
-        return [-1, -1, -1, -1, -1]
+        return [-1, -1, -1, -1, -1, -1]
     for i in range(k):
         dt = k - i
         if cur_age - dt in observations:
@@ -96,11 +96,13 @@ class KalmanBoxTracker(object):
         function k_previous_obs. It is ugly and I do not like it. But to support generate observation array in a 
         fast and unified way, which you would see below k_observations = np.array([k_previous_obs(...]]), let's bear it for now.
         """
-        self.last_observation = np.array([-1, -1, -1, -1, -1])  # placeholder
+        self.last_observation = np.array([-1, -1, -1, -1, -1, -1])  # placeholder
         self.observations = dict()
         self.history_observations = []
         self.velocity = None
         self.delta_t = delta_t
+        self.cur_class_idx = bbox[5]
+        self.cur_score = bbox[4]
 
     def update(self, bbox):
         """
@@ -128,6 +130,9 @@ class KalmanBoxTracker(object):
             self.last_observation = bbox
             self.observations[self.age] = bbox
             self.history_observations.append(bbox)
+
+            self.cur_class_idx = bbox[5]
+            self.cur_score = bbox[4]
 
             self.time_since_update = 0
             self.history = []
@@ -309,6 +314,7 @@ class OCSort(object):
         for trk in reversed(self.trackers):
             if trk.last_observation.sum() < 0:
                 d = trk.get_state()[0]
+                d = np.append(d, [trk.cur_score, trk.cur_class_idx])
             else:
                 """
                     this is optional to use the recent observation or the kalman filter prediction,
@@ -324,7 +330,7 @@ class OCSort(object):
                 self.trackers.pop(i)
         if(len(ret) > 0):
             return np.concatenate(ret)
-        return np.empty((0, 5))
+        return np.empty((0, 7))
 
     def update_public(self, dets, cates, scores):
         self.frame_count += 1

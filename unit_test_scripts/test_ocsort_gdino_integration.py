@@ -8,7 +8,6 @@ and OC-Sort's update method to ensure proper tracking of detected objects.
 import numpy as np
 import torch
 from libs.ocsort.ocsort import OCSort
-from libs.gdino_process import Model
 import supervision as sv
 
 
@@ -127,7 +126,7 @@ def test_ocsort_with_gdino_format():
         
         # Step 3: Prepare confidence and class indices
         confidence = logits.numpy()
-        phrase_class_idx = torch.arange(0, xyxy.shape[0]).numpy()
+        phrase_class_idx = torch.arange(xyxy.shape[0]).numpy()
         
         print(f"\nPreparing OC-Sort input:")
         print(f"  - confidence shape: {confidence.shape}")
@@ -330,22 +329,7 @@ def test_format_notes():
                 "Input boxes are in cxcywh format, normalized to [0, 1]",
                 "Boxes are scaled: boxes * [w, h, w, h]",
                 "Then converted from cxcywh to xyxy using torchvision.ops.box_convert",
-                "phrase_class_idx = torch.range(0, N) - assigns sequential class IDs",
-                "⚠️  NOTE: torch.range is deprecated, should use torch.arange",
-            ]
-        },
-        {
-            "title": "Potential Issues Found",
-            "points": [
-                "⚠️  In gdino_process.py line 175:",
-                "   phrase_class_idx = torch.range(0, xyxy.shape[0]).numpy()",
-                "   Should be: torch.arange(0, xyxy.shape[0]).numpy()",
-                "   torch.range(0, N) includes N, so it creates N+1 elements!",
-                "   This causes shape mismatch: (N+1,) vs expected (N,)",
-                "",
-                "⚠️  The correct implementation should be:",
-                "   phrase_class_idx = torch.arange(xyxy.shape[0]).numpy()",
-                "   or: phrase_class_idx = np.arange(xyxy.shape[0])",
+                "phrase_class_idx = torch.arange(N) - assigns sequential class IDs",
             ]
         },
         {

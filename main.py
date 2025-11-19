@@ -11,8 +11,8 @@ from libs.ocsort.ocsort import OCSort
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-VIDEO_PATH = "./sitting.mp4"
-CLASSES = ["person black jacket sitting on a chair"]
+VIDEO_PATH = "./cam_footage.mp4"
+CLASSES = ["person white shirt sitting on a chair"]
 BOX_THRESHOLD = 0.35
 TEXT_THRESHOLD = 0.25
 BATCH_SIZE = 16
@@ -22,7 +22,8 @@ ANNOTATION_DIR = "./history"
 
 
 def run_pipeline() -> None:
-    print('Loading the model, make sure empty memory still available')
+	print('Loading the model, make sure empty memory still available')
+	
 	model = GDINO(
 		"./models/dino/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
 		"./models/dino/GroundingDINO/weights/groundingdino_swint_ogc.pth",
@@ -39,6 +40,7 @@ def run_pipeline() -> None:
 
 
 	all_results = []
+	oc_sort = OCSort(0.3, 120, 3, 0.3)
 
 	print('Preprocessing frames and predicting / detecting objects specified')
 	for batch in video_stream:
@@ -47,7 +49,6 @@ def run_pipeline() -> None:
 		end_time = time.perf_counter()
 		print(f"Took {(end_time - curr_time):.4f} seconds to complete Enhancement")
 		curr_time = time.perf_counter()		
-        oc_sort = OCSort(0.3)
 
 		# batch_results = model.predict_with_classes(
 		# 	processed,

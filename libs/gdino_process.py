@@ -19,8 +19,8 @@ class DetectionResult:
     timestamp_ms: float
     detections: sv.Detections
     phrases: List[str]
-    boxes_cxcywh: torch.Tensor
-    logits: torch.Tensor
+    # boxes_cxcywh: torch.Tensor
+    # logits: torch.Tensor
 
 class Model:
 
@@ -147,14 +147,25 @@ class Model:
                 ocsort = ocsort_model
             )
 
+            # if len(boxes) > 0:
+            #     print("\n"+">>"*20 + f"\nHere is the sample output with shape {boxes.shape}\n")
+            #     print(boxes[0])
+            #     print()
+            #     print(f"confidence: {logits[0]}")
+            #     print("\n"+">>"*20)
+            # else:
+            #     print("\n"+">>"*20 + "\nNo output / zero detected\n\n")
+            #     print("\n"+">>"*20)
+
+
             results.append(
                 DetectionResult(
                     frame_index=int(frame_batch.frame_indices[i].item()),
                     timestamp_ms=float(frame_batch.timestamps_ms[i].item()),
                     detections=detections,
                     phrases=phrases,
-                    boxes_cxcywh=boxes.cpu(),
-                    logits=logits.cpu(),
+                    # boxes_cxcywh=boxes.cpu(),
+                    # logits=logits.cpu(),
                 )
             )
 
@@ -174,8 +185,22 @@ class Model:
         confidence = logits.numpy()
         phrase_class_idx = np.arange(xyxy.shape[0])
         out = np.column_stack([xyxy, confidence, phrase_class_idx])
+
+        # if len(out) > 0:
+        #     print("\n"+">>"*20 + f"\nHere is the sample output with shape {out.shape}\n")
+        #     print(out[0])
+        #     print("\n"+">>"*20)
+        # else:
+        #     print("\n"+">>"*20 + "\nNo output / zero detected\n")
+        #     print(xyxy.shape)
+        #     print(confidence.shape)
+        #     print(phrase_class_idx.shape)
+        #     print(out.shape)
+        #     print("\n"+">>"*20)
+
         oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
         ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
+
         
         return sv.Detections(xyxy=oc_outputs[:, : 4], confidence=oc_outputs[:, 4], class_id=oc_outputs[:, 5], tracker_id=oc_outputs[:, 6])
 
@@ -363,7 +388,10 @@ def save_to_dir_anotated(
         annotated_frame = frame
         res = result_map.get(frame_idx)
         if res is not None:
-            annotated_frame = annotate_bgr(frame, res.boxes_cxcywh, res.logits, res.phrases)
+            ## i need to translate the class ids from the detections.class_id into the corresponding phrases
+            phrases = res.phrases
+            p = [phrases[idx] for idx in res.detections.class_id.astype(np.int32)]
+            annotated_frame = annotate_bgr(frame, res.detections.xyxy, res.detections.confidence, p, res.detections.tracker_id.astype(np.int32))
 
         if writer is None:
             h, w = annotated_frame.shape[:2]
@@ -380,19 +408,20 @@ def save_to_dir_anotated(
 
 
 def annotate_bgr(image_bgr: np.ndarray,
-                 boxes: torch.Tensor,
-                 logits: torch.Tensor,
-                 phrases: List[str]) -> np.ndarray:
+                 boxes: np.ndarray,
+                 logits: np.ndarray,
+                 phrases: List[str],
+                 tracker_ids: np.ndarray) -> np.ndarray:
     """
     Draw boxes/labels on a BGR image and return BGR.
     """
-    h, w, _ = image_bgr.shape
+    # h, w, _ = image_bgr.shape
 
-    boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
-    xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+    # boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
+    # xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
 
-    detections = sv.Detections(xyxy=xyxy)
-    labels = [f"{p} {l:.2f}" for p, l in zip(phrases, logits)]
+    detections = sv.Detections(xyxy=boxes)
+    labels = [f"{p} {t} {l:.2f}" for p, l, t in zip(phrases, logits, tracker_ids)]
 
     bbox_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.INDEX)
     label_annotator = sv.LabelAnnotator(color_lookup=sv.ColorLookup.INDEX)
