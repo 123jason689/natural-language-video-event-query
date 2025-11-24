@@ -33,7 +33,7 @@ def run_pipeline() -> None:
 	print('Reading the stream frames and processing based on fps')
 	video_stream = VidTensor(
 		VIDEO_PATH,
-		torch.device("cpu"),
+		DEVICE,
 		batch_size=BATCH_SIZE,
 		target_fps=TARGET_FPS,
 	)

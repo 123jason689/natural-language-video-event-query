@@ -132,13 +132,14 @@ class Model:
         source_w = int(frame_batch.width)
 
         for i in range(processed_frames.shape[0]):
-            boxes, logits, phrases = predict(
-                model=self.model,
-                image=processed_frames[i],
-                caption=caption,
-                box_threshold=box_threshold,
-                text_threshold=text_threshold,
-                device=self.device)
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                boxes, logits, phrases = predict(
+                    model=self.model,
+                    image=processed_frames[i],
+                    caption=caption,
+                    box_threshold=box_threshold,
+                    text_threshold=text_threshold,
+                    device=self.device)
             detections = Model.post_process_result(
                 source_h=source_h,
                 source_w=source_w,
@@ -146,17 +147,6 @@ class Model:
                 logits=logits,
                 ocsort = ocsort_model
             )
-
-            # if len(boxes) > 0:
-            #     print("\n"+">>"*20 + f"\nHere is the sample output with shape {boxes.shape}\n")
-            #     print(boxes[0])
-            #     print()
-            #     print(f"confidence: {logits[0]}")
-            #     print("\n"+">>"*20)
-            # else:
-            #     print("\n"+">>"*20 + "\nNo output / zero detected\n\n")
-            #     print("\n"+">>"*20)
-
 
             results.append(
                 DetectionResult(
