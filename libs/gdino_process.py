@@ -176,7 +176,7 @@ class Model:
         phrase_class_idx = np.arange(xyxy.shape[0])
         out = np.column_stack([xyxy, confidence, phrase_class_idx])
 
-        oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
+        oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w), 3) # dont ask me why it's like this, legacy code babyyyyy.....
         ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
         
         if len(oc_outputs) == 0:
@@ -369,7 +369,8 @@ def save_to_dir_anotated(
     writer = None
 
     result_map = {res.frame_index: res for res in sorted(frame_results, key=lambda r: r.frame_index)}
-    print(">"*20 + f"xyxy dtype is {result_map[list(result_map.keys())[0]].detections.xyxy.dtype}" + "<"*20)
+
+    last_res = None
 
     frame_idx = 0
     while True:
@@ -380,8 +381,12 @@ def save_to_dir_anotated(
         # frame is BGR from OpenCV. keep it BGR.
         annotated_frame = frame
         res = result_map.get(frame_idx)
+
         if res is not None:
-            annotated_frame = annotate_bgr(frame, res.detections, res.phrases)
+            last_res = res
+
+        if last_res is not None:
+            annotated_frame = annotate_bgr(frame, last_res.detections, last_res.phrases)
 
         if writer is None:
             h, w = annotated_frame.shape[:2]

@@ -197,7 +197,7 @@ class OCSort(object):
 
     #### Not original from noahcao/OC_SORT/tree/master/trackers/ocsort_tracker
     #### eddited to fit the needs to have the class idx passed through
-    def update(self, output_results, img_info, img_size):
+    def update(self, output_results, img_info, img_size, coasting_thresh = 3):
         """
         Params:
           dets - a numpy array of detections in the format [[x1,y1,x2,y2,score, class_id],[x1,y1,x2,y2,score, class_id],...]
@@ -321,7 +321,7 @@ class OCSort(object):
                     we didn't notice significant difference here
                 """
                 d = trk.last_observation
-            if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
+            if (trk.time_since_update < coasting_thresh) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
                 # +1 as MOT benchmark requires positive
                 ret.append(np.concatenate((d, [trk.id+1])).reshape(1, -1))
             i -= 1
