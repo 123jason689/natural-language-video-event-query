@@ -176,18 +176,6 @@ class Model:
         phrase_class_idx = np.arange(xyxy.shape[0])
         out = np.column_stack([xyxy, confidence, phrase_class_idx])
 
-        # if len(out) > 0:
-        #     print("\n"+">>"*20 + f"\nHere is the sample output with shape {out.shape}\n")
-        #     print(out[0])
-        #     print("\n"+">>"*20)
-        # else:
-        #     print("\n"+">>"*20 + "\nNo output / zero detected\n")
-        #     print(xyxy.shape)
-        #     print(confidence.shape)
-        #     print(phrase_class_idx.shape)
-        #     print(out.shape)
-        #     print("\n"+">>"*20)
-
         oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
         ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
 
@@ -367,6 +355,7 @@ def save_to_dir_anotated(
     writer = None
 
     result_map = {res.frame_index: res for res in sorted(frame_results, key=lambda r: r.frame_index)}
+    print(">"*20 + f"xyxy dtype is {result_map[list(result_map.keys())[0]].detections.xyxy.dtype}" + "<"*20)
 
     frame_idx = 0
     while True:

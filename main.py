@@ -11,8 +11,8 @@ from libs.ocsort.ocsort import OCSort
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-VIDEO_PATH = "./cam_footage.mp4"
-CLASSES = ["person white shirt sitting on a chair"]
+VIDEO_PATH = "./sitting.mp4"
+CLASSES = ["person black shoes sitting on a bench"]
 BOX_THRESHOLD = 0.35
 TEXT_THRESHOLD = 0.25
 BATCH_SIZE = 16
