@@ -5,16 +5,18 @@ from libs.gdino_process import (
 	save_to_dir_anotated,
 )
 from libs.preprocess import load_frame_formated
-from libs.typings_ import VidTensor
+from libs.typings_ import VidTensor, ObjectMap
 import time
 from libs.ocsort.ocsort import OCSort
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# VIDEO_PATH = "./cam_footage.mp4"
+# CLASSES = ["person white shirt sitting on a chair with a table"]
 VIDEO_PATH = "./sitting.mp4"
-CLASSES = ["person black shoes sitting on a bench"]
-BOX_THRESHOLD = 0.35
-TEXT_THRESHOLD = 0.25
+CLASSES = ["person black jacket and black shoes sitting on a bench"]
+BOX_THRESHOLD = 0.3
+TEXT_THRESHOLD = 0.3
 BATCH_SIZE = 16
 TARGET_FPS = 6
 SAVE_ANNOTATED = True
@@ -40,7 +42,9 @@ def run_pipeline() -> None:
 
 
 	all_results = []
-	oc_sort = OCSort(0.3, 120, 3, 0.3)
+	oc_sort = OCSort(0.35, 120, 3, 0.3)
+
+	object_map = ObjectMap()
 
 	print('Preprocessing frames and predicting / detecting objects specified')
 	for batch in video_stream:
@@ -62,7 +66,8 @@ def run_pipeline() -> None:
 			CLASSES[0],
 			BOX_THRESHOLD,
 			TEXT_THRESHOLD,
-			oc_sort
+			oc_sort,
+			object_map
 		)
 
 		all_results.extend(batch_results)
@@ -75,7 +80,7 @@ def run_pipeline() -> None:
 	print('Saving processed frames')
 	if SAVE_ANNOTATED:
 		curr_time = time.perf_counter()
-		save_path = save_to_dir_anotated(video_stream.file_path, all_results, ANNOTATION_DIR)
+		save_path = save_to_dir_anotated(video_stream.file_path, all_results, object_map, ANNOTATION_DIR)
 		if save_path:
 			print(f"Annotated video saved to {save_path}")
 		end_time = time.perf_counter()

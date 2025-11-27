@@ -5,3 +5,4 @@ flask
 kornia
 filterpy
 lap
+bidict

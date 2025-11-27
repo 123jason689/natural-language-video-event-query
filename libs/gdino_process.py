@@ -9,8 +9,9 @@ import supervision as sv
 import torch
 from groundingdino.util.inference import annotate, load_model, predict
 from torchvision.ops import box_convert
+from bidict import bidict
 
-from .typings_ import FrameBatch
+from .typings_ import FrameBatch, ObjectMap
 from .ocsort.ocsort import OCSort
 
 @dataclass
@@ -104,7 +105,8 @@ class Model:
         caption: str,
         box_threshold: float,
         text_threshold: float,
-        ocsort_model: OCSort
+        ocsort_model: OCSort,
+        object_map:ObjectMap
     ) -> List[DetectionResult]:
         """
         import cv2
@@ -140,12 +142,24 @@ class Model:
                     box_threshold=box_threshold,
                     text_threshold=text_threshold,
                     device=self.device)
+                
+            phrases_idx = list()
+            for p in phrases:
+                isthere = object_map.object_map.get(p)
+                if isthere == None:
+                    object_map.last_idx += 1
+                    object_map.object_map[p] = object_map.last_idx
+                    phrases_idx.append(object_map.last_idx)
+                else :
+                    phrases_idx.append(isthere)
+
             detections = Model.post_process_result(
                 source_h=source_h,
                 source_w=source_w,
                 boxes=boxes,
                 logits=logits,
-                ocsort = ocsort_model
+                ocsort = ocsort_model,
+                phrase_class_idx = phrases_idx
             )
 
             results.append(
@@ -154,8 +168,6 @@ class Model:
                     timestamp_ms=float(frame_batch.timestamps_ms[i].item()),
                     detections=detections,
                     phrases=phrases,
-                    # boxes_cxcywh=boxes.cpu(),
-                    # logits=logits.cpu(),
                 )
             )
 
@@ -168,19 +180,19 @@ class Model:
             source_w: int,
             boxes: torch.Tensor,
             logits: torch.Tensor,
-            ocsort: OCSort
+            ocsort: OCSort,
+            phrase_class_idx:List
     ) -> sv.Detections:
         boxes = boxes * torch.Tensor([source_w, source_h, source_w, source_h])
         xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
         confidence = logits.cpu().numpy()
-        phrase_class_idx = np.arange(xyxy.shape[0])
+
+        assert xyxy.shape[0] == len(phrase_class_idx) == confidence.shape[0], "boxes amount not same as the classes length or logits amount not the same amount as xyxy"
+
         out = np.column_stack([xyxy, confidence, phrase_class_idx])
 
         oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w), 3) # dont ask me why it's like this, legacy code babyyyyy.....
         ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
-        
-        if len(oc_outputs) == 0:
-            return sv.Detections.empty()
 
         tracked_xyxy_pixel = oc_outputs[:, :4]
         confidence = oc_outputs[:, 4]
@@ -189,6 +201,10 @@ class Model:
 
         tracked_xyxy_norm = tracked_xyxy_pixel / np.array([source_w, source_h, source_w, source_h])
 
+        print(f"Length of tracked objects = {tracked_id.shape[0]}")
+
+        assert tracked_xyxy_norm.shape[0] == class_ids.shape[0] == confidence.shape[0] == tracked_id.shape[0], "OC Sort output wrong shape or not consistent or NoneType"
+        
         return sv.Detections(
             xyxy=tracked_xyxy_norm, 
             confidence=confidence,
@@ -206,8 +222,7 @@ class Model:
                     break
             else:
                 class_ids.append(None)
-        return np.array(class_ids)
-
+        return np.array(class_ids)        
 
 def _sv_to_ocsort_array(
     detections: sv.Detections,
@@ -349,6 +364,7 @@ def sequence_to_ocsort_inputs(
 def save_to_dir_anotated(
     video_path: str,
     frame_results: List[DetectionResult],
+    object_map:ObjectMap,
     dirpath: Optional[str] = None,
 ) -> Optional[str]:
     if not frame_results:
@@ -386,7 +402,7 @@ def save_to_dir_anotated(
             last_res = res
 
         if last_res is not None:
-            annotated_frame = annotate_bgr(frame, last_res.detections, last_res.phrases)
+            annotated_frame = annotate_bgr(frame, last_res.detections, object_map)
 
         if writer is None:
             h, w = annotated_frame.shape[:2]
@@ -428,7 +444,7 @@ def _annotate_bgr(image_bgr: np.ndarray,
 
 def annotate_bgr(image_bgr: np.ndarray,
                  detections: sv.Detections,
-                 phrases: List[str]) -> np.ndarray:
+                 object_map: ObjectMap) -> np.ndarray:
     """
     Draw boxes/labels on a BGR image.
     Expects detections.xyxy to be NORMALIZED (0-1).
@@ -444,7 +460,7 @@ def annotate_bgr(image_bgr: np.ndarray,
     )
 
     labels = [
-        f"#{tracker_id} {phrases[class_id]}: {confidences:.2f}" 
+        f"#{tracker_id} {object_map.object_map.inverse.get(class_id)}: {confidences:.2f}" 
         for tracker_id, class_id, confidences 
         in zip(detections.tracker_id, detections.class_id, detections.confidence)
     ]

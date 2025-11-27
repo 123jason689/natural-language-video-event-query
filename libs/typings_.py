@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from typing import Iterator, List, Optional
+from bidict import bidict
 
 import cv2
 import torch
@@ -199,3 +200,9 @@ class VidTensor(Iterator[FrameBatch]):
 
     def __del__(self) -> None:  # pragma: no cover - defensive
         self.close()
+
+
+class ObjectMap:
+    def __init__(self):
+        self.last_idx = -1
+        self.object_map = bidict()
