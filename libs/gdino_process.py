@@ -172,15 +172,29 @@ class Model:
     ) -> sv.Detections:
         boxes = boxes * torch.Tensor([source_w, source_h, source_w, source_h])
         xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
-        confidence = logits.numpy()
+        confidence = logits.cpu().numpy()
         phrase_class_idx = np.arange(xyxy.shape[0])
         out = np.column_stack([xyxy, confidence, phrase_class_idx])
 
         oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
         ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
-
         
-        return sv.Detections(xyxy=oc_outputs[:, : 4], confidence=oc_outputs[:, 4], class_id=oc_outputs[:, 5], tracker_id=oc_outputs[:, 6])
+        if len(oc_outputs) == 0:
+            return sv.Detections.empty()
+
+        tracked_xyxy_pixel = oc_outputs[:, :4]
+        confidence = oc_outputs[:, 4]
+        class_ids = oc_outputs[:, 5].astype(int)
+        tracked_id = oc_outputs[:, 6].astype(int) 
+
+        tracked_xyxy_norm = tracked_xyxy_pixel / np.array([source_w, source_h, source_w, source_h])
+
+        return sv.Detections(
+            xyxy=tracked_xyxy_norm, 
+            confidence=confidence,
+            class_id=class_ids,
+            tracker_id=tracked_id
+        )
 
     @staticmethod
     def phrases2classes(phrases: List[str], classes: List[str]) -> np.ndarray:
@@ -367,10 +381,7 @@ def save_to_dir_anotated(
         annotated_frame = frame
         res = result_map.get(frame_idx)
         if res is not None:
-            ## i need to translate the class ids from the detections.class_id into the corresponding phrases
-            phrases = res.phrases
-            p = [phrases[idx] for idx in res.detections.class_id.astype(np.int32)]
-            annotated_frame = annotate_bgr(frame, res.detections.xyxy, res.detections.confidence, p, res.detections.tracker_id.astype(np.int32))
+            annotated_frame = annotate_bgr(frame, res.detections, res.phrases)
 
         if writer is None:
             h, w = annotated_frame.shape[:2]
@@ -386,7 +397,7 @@ def save_to_dir_anotated(
     return out_path
 
 
-def annotate_bgr(image_bgr: np.ndarray,
+def _annotate_bgr(image_bgr: np.ndarray,
                  boxes: np.ndarray,
                  logits: np.ndarray,
                  phrases: List[str],
@@ -408,5 +419,37 @@ def annotate_bgr(image_bgr: np.ndarray,
     annotated = image_bgr.copy()
     annotated = bbox_annotator.annotate(scene=annotated, detections=detections)
     annotated = label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
+    return annotated
+
+def annotate_bgr(image_bgr: np.ndarray,
+                 detections: sv.Detections,
+                 phrases: List[str]) -> np.ndarray:
+    """
+    Draw boxes/labels on a BGR image.
+    Expects detections.xyxy to be NORMALIZED (0-1).
+    """
+    h, w, _ = image_bgr.shape
+
+
+    scaled_xyxy = detections.xyxy * np.array([w, h, w, h])
+    drawing_detections = sv.Detections(
+        xyxy=scaled_xyxy,
+        class_id=detections.class_id,
+        tracker_id=detections.tracker_id
+    )
+
+    labels = [
+        f"#{tracker_id} {phrases[class_id]}: {confidences:.2f}" 
+        for tracker_id, class_id, confidences 
+        in zip(detections.tracker_id, detections.class_id, detections.confidence)
+    ]
+
+    bbox_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.INDEX)
+    label_annotator = sv.LabelAnnotator(color_lookup=sv.ColorLookup.INDEX)
+
+    annotated = image_bgr.copy()
+    annotated = bbox_annotator.annotate(scene=annotated, detections=drawing_detections)
+    annotated = label_annotator.annotate(scene=annotated, detections=drawing_detections, labels=labels)
+    
     return annotated
 
