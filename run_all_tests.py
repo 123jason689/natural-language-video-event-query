@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Master test runner for OC-Sort + GDINO integration.
+Master test runner for OC-Sort + GDINO + MobileViCLIP integration.
 
 This script runs all tests and provides a comprehensive report.
 """
 
 import sys
 import traceback
-
 
 def run_test(test_name, test_func):
     """Run a single test and report results."""
@@ -16,11 +15,18 @@ def run_test(test_name, test_func):
     print("▶ "*30)
     
     try:
-        test_func()
-        print(f"\n✅ {test_name} PASSED")
-        return True
+        success = test_func()
+        if success is None: # Handle functions that don't return bool but raise assert errors
+             success = True
+        
+        if success:
+            print(f"\n✅ {test_name} PASSED")
+            return True
+        else:
+            print(f"\n❌ {test_name} FAILED (Function returned False)")
+            return False
     except Exception as e:
-        print(f"\n❌ {test_name} FAILED")
+        print(f"\n❌ {test_name} FAILED (Exception)")
         print(f"Error: {e}")
         traceback.print_exc()
         return False
@@ -29,7 +35,7 @@ def run_test(test_name, test_func):
 def main():
     """Run all tests."""
     print("\n" + "="*80)
-    print(" "*20 + "OC-SORT + GDINO TEST SUITE")
+    print(" "*20 + "VIDEO PIPELINE TEST SUITE")
     print("="*80)
     
     results = {}
@@ -90,6 +96,21 @@ def main():
     except ImportError as e:
         print(f"⚠️  Could not import test_ocsort_gdino_integration: {e}")
         results['Integration Tests'] = False
+
+    # Test 3: MobileViCLIP Preprocessing
+    print("\n\n📍 SECTION 3: MobileViCLIP Preprocessing Tests")
+    print("-"*80)
+    try:
+        from unit_test_scripts.test_mobileviclip_preprocessing import (
+            test_preprocessing_end_to_end
+        )
+        results['MobileViCLIP Preprocessing'] = run_test(
+            "MobileViCLIP Pipeline",
+            test_preprocessing_end_to_end
+        )
+    except ImportError as e:
+        print(f"⚠️  Could not import test_mobileviclip_preprocessing: {e}")
+        results['MobileViCLIP Tests'] = False
     
     # Summary
     print("\n\n" + "="*80)

@@ -224,142 +224,6 @@ class Model:
                 class_ids.append(None)
         return np.array(class_ids)        
 
-def _sv_to_ocsort_array(
-    detections: sv.Detections,
-    phrases: List[str],
-    *,
-    min_conf: float,
-    include_class: bool,
-    class_map: Dict[str, int],
-    default_class_id: int
-) -> np.ndarray:
-    """
-    Convert a single frame's (Detections, phrases) to OC-SORT ndarray.
-    """
-    # Handle empty detections
-    if detections is None or len(detections) == 0:
-        return np.empty((0, 6 if include_class else 5), dtype=float)
-
-    # Boxes (xyxy already in supervision)
-    boxes = detections.xyxy.astype(float)  # (N, 4)
-
-    # Scores (default to 1.0 if missing)
-    if detections.confidence is None:
-        scores = np.ones((boxes.shape[0],), dtype=float)
-    else:
-        scores = detections.confidence.astype(float)
-
-    # Confidence filter
-    keep = scores >= float(min_conf)
-    if not np.any(keep):
-        return np.empty((0, 6 if include_class else 5), dtype=float)
-
-    boxes = boxes[keep]
-    scores = scores[keep]
-
-    if not include_class:
-        return np.hstack([boxes, scores[:, None]])
-
-    # Determine class ids
-    if phrases is not None and len(phrases) > 0:
-        # Align phrases with kept indices; if lengths mismatch, truncate/pad safely
-        N = len(detections)
-        phrases_arr = np.array(phrases[:N], dtype=object)
-        phrases_kept = phrases_arr[keep]
-        if class_map is not None:
-            cls = np.array([class_map.get(p, default_class_id) for p in phrases_kept], dtype=int)
-        else:
-            # If no mapping provided, make per-frame temp ids by hashing (stable within run)
-            cls = np.array([abs(hash(p)) % (2**31) for p in phrases_kept], dtype=int)
-    else:
-        # Fall back to detections.class_id if available
-        if detections.class_id is not None:
-            cls_all = np.asarray(detections.class_id)
-            cls = cls_all[keep].astype(int, copy=False)
-        else:
-            cls = np.full((boxes.shape[0],), default_class_id, dtype=int)
-
-    return np.hstack([boxes, scores[:, None], cls[:, None]])
-
-
-def build_global_class_map(
-    sequence: List[DetectionResult]
-) -> Dict[str, int]:
-    """
-    Build a stable phrase->id mapping across the whole video.
-    """
-    vocab = []
-    seen = set()
-    for result in sequence:
-        phrases = result.phrases
-        if phrases is None:
-            continue
-        for p in phrases:
-            if p is None:
-                continue
-            if p not in seen:
-                seen.add(p)
-                vocab.append(p)
-    # 0..K-1 ids
-    return {p: i for i, p in enumerate(vocab)}
-
-
-def sequence_to_ocsort_inputs(
-    sequence: List[DetectionResult],
-    *,
-    min_conf: float = 0.25,
-    include_class: bool = False,
-    use_global_class_map: bool = False,
-    class_map: Optional[Dict[str, int]] = None,
-    default_class_id: int = -1
-) -> Tuple[List[np.ndarray], Optional[Dict[str, int]]]:
-    """
-    Convert a video sequence of (Detections, phrases) into a list of OC-SORT inputs.
-
-    Parameters
-    ----------
-    sequence : List[(sv.Detections, List[str])]
-        One tuple per frame.
-    min_conf : float
-        Confidence threshold applied before tracking.
-    include_class : bool
-        If True, outputs (N, 6): [x1,y1,x2,y2,score,class_id].
-        Otherwise (N, 5): [x1,y1,x2,y2,score].
-    use_global_class_map : bool
-        If True, build a consistent phrase->id map across the *entire* sequence.
-        Ignored if include_class=False.
-    class_map : Optional[Dict[str,int]]
-        Provide your own phrase->id map (overrides auto-building).
-    default_class_id : int
-        Used when a phrase (or class) is unknown/missing.
-
-    Returns
-    -------
-    (dets_per_frame, phrase_id_map)
-        dets_per_frame: List[np.ndarray] suitable for OC-SORT update per frame.
-        phrase_id_map: Dict[str,int] if include_class=True, else None.
-    """
-    phrase_id_map:Dict[str, int] = dict()
-    if include_class:
-        if class_map is not None:
-            phrase_id_map = class_map
-        elif use_global_class_map:
-            phrase_id_map = build_global_class_map(sequence)
-
-    outputs: List[np.ndarray] = []
-    for result in sequence:
-        arr = _sv_to_ocsort_array(
-            result.detections,
-            result.phrases,
-            min_conf=min_conf,
-            include_class=include_class,
-            class_map=phrase_id_map,
-            default_class_id=default_class_id
-        )
-        outputs.append(arr)
-
-    return outputs, (phrase_id_map if include_class else None)
-
 
 def save_to_dir_anotated(
     video_path: str,
@@ -417,31 +281,6 @@ def save_to_dir_anotated(
 
     return out_path
 
-
-def _annotate_bgr(image_bgr: np.ndarray,
-                 boxes: np.ndarray,
-                 logits: np.ndarray,
-                 phrases: List[str],
-                 tracker_ids: np.ndarray) -> np.ndarray:
-    """
-    Draw boxes/labels on a BGR image and return BGR.
-    """
-    # h, w, _ = image_bgr.shape
-
-    # boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
-    # xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
-
-    detections = sv.Detections(xyxy=boxes)
-    labels = [f"{p} {t} {l:.2f}" for p, l, t in zip(phrases, logits, tracker_ids)]
-
-    bbox_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.INDEX)
-    label_annotator = sv.LabelAnnotator(color_lookup=sv.ColorLookup.INDEX)
-
-    annotated = image_bgr.copy()
-    annotated = bbox_annotator.annotate(scene=annotated, detections=detections)
-    annotated = label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
-    return annotated
-
 def annotate_bgr(image_bgr: np.ndarray,
                  detections: sv.Detections,
                  object_map: ObjectMap) -> np.ndarray:
@@ -474,3 +313,5 @@ def annotate_bgr(image_bgr: np.ndarray,
     
     return annotated
 
+def unnormbbox(bbox, w, h):
+    return bbox * np.array([w, h, w, h])

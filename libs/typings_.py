@@ -201,7 +201,7 @@ class VidTensor(Iterator[FrameBatch]):
     def __del__(self) -> None:  # pragma: no cover - defensive
         self.close()
 
-
+@dataclass
 class ObjectMap:
     def __init__(self):
         self.last_idx = -1
