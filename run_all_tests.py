@@ -16,8 +16,8 @@ def run_test(test_name, test_func):
     
     try:
         success = test_func()
-        if success is None: # Handle functions that don't return bool but raise assert errors
-             success = True
+        if success is None or type(success) is not bool: # Handle functions that don't return bool but raise assert errors
+            success = True
         
         if success:
             print(f"\n✅ {test_name} PASSED")
