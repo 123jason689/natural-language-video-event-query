@@ -179,13 +179,14 @@ ASSO_FUNCS = {  "iou": iou_batch,
 
 class OCSort(object):
     def __init__(self, det_thresh, max_age=30, min_hits=3, 
-        iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False):
+        iou_threshold=0.3, coasting_thresh=1, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False):
         """
         Sets key parameters for SORT
         """
         self.max_age = max_age
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
+        self.coasting_thresh = coasting_thresh
         self.trackers = []
         self.frame_count = 0
         self.det_thresh = det_thresh
@@ -197,7 +198,7 @@ class OCSort(object):
 
     #### Not original from noahcao/OC_SORT/tree/master/trackers/ocsort_tracker
     #### eddited to fit the needs to have the class idx passed through
-    def update(self, output_results, img_info, img_size, coasting_thresh = 3):
+    def update(self, output_results, img_info, img_size):
         """
         Params:
           dets - a numpy array of detections in the format [[x1,y1,x2,y2,score, class_id],[x1,y1,x2,y2,score, class_id],...]
@@ -321,7 +322,7 @@ class OCSort(object):
                     we didn't notice significant difference here
                 """
                 d = trk.last_observation
-            if (trk.time_since_update < coasting_thresh) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
+            if (trk.time_since_update < self.coasting_thresh) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
                 # +1 as MOT benchmark requires positive
                 ret.append(np.concatenate((d, [trk.id+1])).reshape(1, -1))
             i -= 1

@@ -43,7 +43,7 @@ def run_pipeline() -> None:
 
 
 	all_results = []
-	oc_sort = OCSort(0.35, 120, 3, 0.3)
+	oc_sort = OCSort(BOX_THRESHOLD, 120, 3, 0.3, coasting_thresh=3)
 
 	object_map = ObjectMap()
 

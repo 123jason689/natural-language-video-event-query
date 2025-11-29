@@ -191,7 +191,7 @@ class Model:
 
         out = np.column_stack([xyxy, confidence, phrase_class_idx])
 
-        oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w), 3) # dont ask me why it's like this, legacy code babyyyyy.....
+        oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
         ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
 
         tracked_xyxy_pixel = oc_outputs[:, :4]
