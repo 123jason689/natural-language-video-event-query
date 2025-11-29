@@ -20,4 +20,37 @@ cd weights
 curl -s -L -O https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
 cd $SCRIPT_DIR
 
+### MobileViClip setup script
+python -m pip show gdown >/dev/null 2>&1 || python -m pip install gdown
 
+python setup_helper.py
+
+cd $SCRIPT_DIR/models/mobileviclip/
+
+git clone --no-checkout --filter=blob:none https://github.com/MCG-NJU/MobileViCLIP.git
+
+cd MobileViCLIP
+
+git sparse-checkout init --cone
+
+git sparse-checkout set models utils # models/ folder has everything we need
+
+git fetch --depth 1 origin 5c9901f61bdca89df35fde8e0ff6aea6e3261f43
+
+git checkout 5c9901f61bdca89df35fde8e0ff6aea6e3261f43
+
+touch utils/__init__.py
+
+cp $SCRIPT_DIR/libs/mobileclip_setup.py ./setup.py
+
+cp $SCRIPT_DIR/libs/mobileclip_init.py ./__init__.py
+
+cd ../
+
+mv MobileViCLIP mobileviclip
+
+pip install -e .
+
+cd $SCRIPT_DIR
+
+# cp ../../../libs/mobileclip_setup.py ../setup.py
