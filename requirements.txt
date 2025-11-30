@@ -30,14 +30,14 @@ tqdm==4.67.1
 transformers==4.57.0
 ultralytics==8.3.205
 yapf==0.43.0
-# apex
-# deepspeed
-# fiftyone
-# flash_attn
-# fvcore
-# gradio
-# ipdb
-# tensorflow
-# termcolor
-# typer
-# wandb
+apex
+deepspeed
+fiftyone
+flash_attn
+fvcore
+gradio
+ipdb
+tensorflow
+termcolor
+typer
+wandb
