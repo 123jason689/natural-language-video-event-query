@@ -1,35 +1,35 @@
 numpy<2.0
-addict==2.4.0
-bidict==0.23.1
-coremltools==9.0
-einops==0.8.1
-filterpy==1.4.5
-gdown==5.2.0
-huggingface_hub==0.35.3
-kornia==0.8.1
-lap==0.5.12
-matplotlib==3.10.6
-numpy==1.26.4
-onnx==1.19.1
-# opencv_python==4.12.0.88
-opencv_python==4.11.0.86
-peft==0.18.0
-pillow==11.3.0
-pycocotools==2.0.10
-PyYAML==6.0.3
-Requests==2.32.5
-scipy==1.16.2
-setuptools==78.1.1
-spikingjelly==0.0.0.0.14
-supervision==0.26.1
-timm==0.5.4
-torch==2.6.0
-torchaudio==2.6.0
-torchvision==0.21.0
-tqdm==4.67.1
-transformers==4.57.0
-ultralytics==8.3.205
-yapf==0.43.0
+addict
+bidict
+coremltools
+einops
+filterpy
+gdown
+huggingface_hub
+kornia
+lap
+matplotlib
+numpy
+onnx
+opencv_python
+peft
+pillow
+pycocotools
+PyYAML
+Requests
+scipy
+setuptools
+spikingjelly
+supervision
+timm
+torch
+torchaudio
+torchvision
+tqdm
+transformers
+ultralytics
+yapf
+enscons
 apex
 deepspeed
 fiftyone
@@ -41,3 +41,51 @@ tensorflow
 termcolor
 typer
 wandb
+
+
+# numpy<2.0
+# addict==2.4.0
+# bidict==0.23.1
+# coremltools==9.0
+# einops==0.8.1
+# filterpy==1.4.5
+# gdown==5.2.0
+# huggingface_hub==0.35.3
+# kornia==0.8.1
+# lap==0.5.12
+# # matplotlib==3.10.6
+# matplotlib
+# numpy==1.26.4
+# onnx==1.19.1
+# # opencv_python==4.12.0.88
+# opencv_python==4.11.0.86
+# peft==0.18.0
+# pillow==11.3.0
+# pycocotools==2.0.10
+# PyYAML==6.0.3
+# Requests==2.32.5
+# # scipy==1.16.2
+# scipy
+# setuptools==78.1.1
+# spikingjelly==0.0.0.0.14
+# supervision==0.26.1
+# timm==0.5.4
+# torch==2.6.0
+# torchaudio==2.6.0
+# torchvision==0.21.0
+# tqdm==4.67.1
+# transformers==4.57.0
+# ultralytics==8.3.205
+# yapf==0.43.0
+# enscons
+# apex
+# deepspeed
+# fiftyone
+# flash_attn
+# fvcore
+# gradio
+# ipdb
+# tensorflow
+# termcolor
+# typer
+# wandb
