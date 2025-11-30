@@ -1,5 +1,4 @@
 numpy<2.0
-enscons
 addict
 bidict
 coremltools
@@ -29,7 +28,6 @@ tqdm
 transformers
 ultralytics
 yapf
-apex
 deepspeed
 fiftyone
 flash_attn
