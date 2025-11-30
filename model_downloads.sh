@@ -43,9 +43,15 @@ git checkout 5c9901f61bdca89df35fde8e0ff6aea6e3261f43
 
 touch utils/__init__.py
 
-cp $SCRIPT_DIR/libs/mobileclip_setup.py ../setup.py
+cp $SCRIPT_DIR/libs/setup_edited_default_scripts/mobileclip_setup.py ../setup.py
 
-cp $SCRIPT_DIR/libs/mobileclip_init.py ./__init__.py
+cp $SCRIPT_DIR/libs/setup_edited_default_scripts/mobileclip_init.py ./__init__.py
+
+cp -f $SCRIPT_DIR/libs/setup_edited_default_scripts/flash_attention_class.py ./models/backbones/internvideo2/flash_attention_class.py
+
+cp -f $SCRIPT_DIR/libs/setup_edited_default_scripts/internvideo2_clip_vision.py ./models/backbones/internvideo2/internvideo2_clip_vision.py
+
+cp -f $SCRIPT_DIR/libs/setup_edited_default_scripts/internvl_clip_vision.py ./models/backbones/internvideo2/internvl_clip_vision.py
 
 cd ../
 
