@@ -221,3 +221,5 @@ models/*
 # local configs
 .vscode/*
 .DS_Store
+
+*.h
