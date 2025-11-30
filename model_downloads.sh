@@ -16,7 +16,9 @@ echo $CUDA_HOME
 git clone https://github.com/IDEA-Research/GroundingDINO.git "$SCRIPT_DIR/models/dino/GroundingDINO/"
 cd $SCRIPT_DIR/models/dino/GroundingDINO/groundingdino/models/GroundingDINO/csrc/MsDeformAttn/
 sed -i 's/value.type()/value.scalar_type()/g' ms_deform_attn_cuda.cu
+sed -i 's/value.scalar_type().is_cuda()/value.is_cuda()/g' ms_deform_attn_cuda.cu
 sed -i 's/value.type()/value.scalar_type()/g' ms_deform_attn_cpu.cpp
+sed -i 's/value.type().is_cuda()/value.is_cuda()/g' ms_deform_attn.h
 grep "value.scalar_type()" ms_deform_attn_cuda.cu | head -n 2
 cd $SCRIPT_DIR/models/dino/GroundingDINO/
 pip install -v --no-build-isolation -e .
