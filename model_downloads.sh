@@ -10,6 +10,8 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 #     echo "Model downloaded into $YOLO_PATH"
 # fi
 
+pip install -r requirements.txt
+
 export CUDA_HOME="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.3"
 echo $CUDA_HOME
 git clone https://github.com/IDEA-Research/GroundingDINO.git "$SCRIPT_DIR/models/dino/GroundingDINO/"
@@ -41,7 +43,7 @@ git checkout 5c9901f61bdca89df35fde8e0ff6aea6e3261f43
 
 touch utils/__init__.py
 
-cp $SCRIPT_DIR/libs/mobileclip_setup.py ./setup.py
+cp $SCRIPT_DIR/libs/mobileclip_setup.py ../setup.py
 
 cp $SCRIPT_DIR/libs/mobileclip_init.py ./__init__.py
 
