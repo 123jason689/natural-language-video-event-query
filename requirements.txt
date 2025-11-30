@@ -31,7 +31,7 @@ yapf==0.43.0
 apex
 deepspeed
 fiftyone
-flash_attn
+# flash_attn
 fvcore
 gradio
 ipdb

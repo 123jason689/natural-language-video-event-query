@@ -10,17 +10,23 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 #     echo "Model downloaded into $YOLO_PATH"
 # fi
 
-pip install -r requirements.txt
 
 export CUDA_HOME="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.3"
 echo $CUDA_HOME
 git clone https://github.com/IDEA-Research/GroundingDINO.git "$SCRIPT_DIR/models/dino/GroundingDINO/"
+cd $SCRIPT_DIR/models/dino/GroundingDINO/groundingdino/models/GroundingDINO/csrc/MsDeformAttn/
+sed -i 's/value.type()/value.scalar_type()/g' ms_deform_attn_cuda.cu
+sed -i 's/value.type()/value.scalar_type()/g' ms_deform_attn_cpu.cpp
+grep "value.scalar_type()" ms_deform_attn_cuda.cu | head -n 2
 cd $SCRIPT_DIR/models/dino/GroundingDINO/
-pip install -e . --no-build-isolation
+pip install -v --no-build-isolation -e .
 mkdir weights
 cd weights
 curl -s -L -O https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
 cd $SCRIPT_DIR
+
+### installing all dependencies
+pip install -r requirements.txt --no-build-isolation
 
 ### MobileViClip setup script
 python -m pip show gdown >/dev/null 2>&1 || python -m pip install gdown
@@ -57,7 +63,7 @@ cd ../
 
 mv MobileViCLIP mobileviclip
 
-pip install -e . --no-build-isolation
+pip install -e . -v --no-build-isolation
 
 cd $SCRIPT_DIR
 
