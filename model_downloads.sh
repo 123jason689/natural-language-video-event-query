@@ -16,7 +16,7 @@ export CUDA_HOME="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.3"
 echo $CUDA_HOME
 git clone https://github.com/IDEA-Research/GroundingDINO.git "$SCRIPT_DIR/models/dino/GroundingDINO/"
 cd $SCRIPT_DIR/models/dino/GroundingDINO/
-pip install -e .
+pip install -e . --no-build-isolation
 mkdir weights
 cd weights
 curl -s -L -O https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
@@ -57,7 +57,7 @@ cd ../
 
 mv MobileViCLIP mobileviclip
 
-pip install -e .
+pip install -e . --no-build-isolation
 
 cd $SCRIPT_DIR
 
