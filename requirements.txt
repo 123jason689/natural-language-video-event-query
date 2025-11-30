@@ -1,4 +1,5 @@
 numpy<2.0
+enscons
 addict
 bidict
 coremltools
@@ -9,7 +10,6 @@ huggingface_hub
 kornia
 lap
 matplotlib
-numpy
 onnx
 opencv_python
 peft
@@ -29,7 +29,6 @@ tqdm
 transformers
 ultralytics
 yapf
-enscons
 apex
 deepspeed
 fiftyone
@@ -41,6 +40,7 @@ tensorflow
 termcolor
 typer
 wandb
+numpy==1.26.4
 
 
 # numpy<2.0
