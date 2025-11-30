@@ -8,8 +8,8 @@ from libs.preprocess import load_frame_formated
 from libs.typings_ import VidTensor, ObjectMap
 import time
 from libs.ocsort.ocsort import OCSort
-import mobileviclip.models
-import mobileviclip.utils
+# import mobileviclip.models
+# import mobileviclip.utils
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # VIDEO_PATH = "./cam_footage.mp4"
