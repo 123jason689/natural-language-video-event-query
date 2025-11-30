@@ -1,3 +1,4 @@
+numpy<2.0
 addict==2.4.0
 bidict==0.23.1
 coremltools==9.0
@@ -8,9 +9,10 @@ huggingface_hub==0.35.3
 kornia==0.8.1
 lap==0.5.12
 matplotlib==3.10.6
-numpy==2.2.6
+numpy==1.26.4
 onnx==1.19.1
-opencv_python==4.12.0.88
+# opencv_python==4.12.0.88
+opencv_python==4.11.0.86
 peft==0.18.0
 pillow==11.3.0
 pycocotools==2.0.10
@@ -21,21 +23,21 @@ setuptools==78.1.1
 spikingjelly==0.0.0.0.14
 supervision==0.26.1
 timm==0.5.4
-torch==2.9.1
-torchaudio==2.9.1
-torchvision==0.24.1
+torch==2.6.0
+torchaudio==2.6.0
+torchvision==0.21.0
 tqdm==4.67.1
 transformers==4.57.0
 ultralytics==8.3.205
 yapf==0.43.0
-apex
-deepspeed
-fiftyone
+# apex
+# deepspeed
+# fiftyone
 # flash_attn
-fvcore
-gradio
-ipdb
-tensorflow
-termcolor
-typer
-wandb
+# fvcore
+# gradio
+# ipdb
+# tensorflow
+# termcolor
+# typer
+# wandb
