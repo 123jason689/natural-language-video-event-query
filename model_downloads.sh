@@ -23,6 +23,7 @@ sed -i 's/value.type()/value.scalar_type()/g' ms_deform_attn_cpu.cpp
 sed -i 's/value.type().is_cuda()/value.is_cuda()/g' ms_deform_attn.h
 grep "value.scalar_type()" ms_deform_attn_cuda.cu | head -n 2
 cd $SCRIPT_DIR/models/dino/GroundingDINO/
+cp $SCRIPT_DIR/libs/setup_edited_default_scripts/gdino_requirements.txt ./requirements.txt
 pip install -v --no-build-isolation -e .
 mkdir weights
 cd weights
