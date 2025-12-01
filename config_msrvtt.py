@@ -1,5 +1,5 @@
-from configs.data import *
-from configs.model import *
+from libs.configs.data import *
+from libs.configs.model import *
 
 # ========================= data ==========================
 train_corpus = "msrvtt_1k_test" 
