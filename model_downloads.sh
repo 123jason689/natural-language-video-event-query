@@ -43,7 +43,7 @@ cd MobileViCLIP
 
 git sparse-checkout init --cone
 
-git sparse-checkout set models utils # models/ folder has everything we need
+git sparse-checkout set models utils dataset # models/ folder has everything we need
 
 git fetch --depth 1 origin 5c9901f61bdca89df35fde8e0ff6aea6e3261f43
 
@@ -68,5 +68,3 @@ mv MobileViCLIP mobileviclip
 pip install -e . -v --no-build-isolation
 
 cd $SCRIPT_DIR
-
-# cp ../../../libs/mobileclip_setup.py ../setup.py
