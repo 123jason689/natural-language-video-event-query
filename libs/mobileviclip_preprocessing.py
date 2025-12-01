@@ -258,8 +258,6 @@ class MobileViClipPreprocessor:
             
             # Stack: list of (C, H, W) -> (T, C, H, W)
             clip_tensor = torch.stack(clip_frames, dim=0)
-            # Permute to (C, T, H, W)
-            clip_tensor = clip_tensor.permute(1, 0, 2, 3)
             
             clips.append(clip_tensor)
             
