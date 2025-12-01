@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from mobileviclip.models.mobileviclip_small import MobileViCLIP_Small
 from mobileviclip.utils.config import Config
-from mobileviclip.dataset.text_prompt import kinetics_templates
+from libs.text_prompt import kinetics_templates
 from typing import Dict, List
 
 class Model:
@@ -49,7 +49,7 @@ class Model:
 
     def encode_text(self, prompt: str):
         # Use template to match training distribution
-        text_input = kinetics_templates[0].format(prompt)
+        text_input = kinetics_templates[2].format(prompt)
         tokens = self.tokenizer(text_input).to(self.device)
         
         with torch.no_grad():
