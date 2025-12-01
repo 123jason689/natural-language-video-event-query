@@ -29,7 +29,7 @@ ANNOTATION_DIR = "./history"
 GDINO_CONFIG = "./models/dino/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
 GDINO_BASE_CKPT = "./models/dino/GroundingDINO/weights/groundingdino_swint_ogc.pth"
 
-MOBILE_CLIP_CONFIG = "models/mobileviclip/mobileviclip/scripts/evaluation/clip/zero_shot/mobileviclip_small/config.py"
+MOBILE_CLIP_CONFIG = "./config_msrvtt.py"
 MOBILE_CLIP_BASE_CKPT = "models/mobileviclip/weights/mobileclip_s2.pt" 
 MOBILE_CLIP_FINETUNED_CKPT = "models/mobileviclip/weights/mobileviclip_small.pt"
 
