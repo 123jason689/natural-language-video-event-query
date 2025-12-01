@@ -30,7 +30,7 @@ ultralytics
 yapf
 deepspeed
 fiftyone
-flash_attn
+# flash_attn
 fvcore
 gradio
 ipdb

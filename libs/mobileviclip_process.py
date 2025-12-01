@@ -112,7 +112,7 @@ class Model:
         
         return results_timeline
     
-    def process_timeline(results_timeline, overlap_threshold=0.5):
+    def process_timeline(self, results_timeline, overlap_threshold:float=0.5):
         """
         Merges overlapping or adjacent clips for the same track ID into single event segments.
         
