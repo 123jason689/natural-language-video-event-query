@@ -68,3 +68,5 @@ mv MobileViCLIP mobileviclip
 pip install -e . -v --no-build-isolation
 
 cd $SCRIPT_DIR
+
+cp -f ./libs/configs/mobileclip_s2.json ./models/backbones/internvideo2/mobileclip/configs/mobileclip_s2.json
