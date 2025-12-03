@@ -19,8 +19,8 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 VIDEO_PATH = "./sitting.mp4"
 PROMPT = "person black jacket and black shoes sitting on a bench"
-BOX_THRESHOLD = 0.3
-TEXT_THRESHOLD = 0.3
+BOX_THRESHOLD = 0.35
+TEXT_THRESHOLD = 0.35
 BATCH_SIZE = 16
 TARGET_FPS = 6
 SAVE_ANNOTATED = True
@@ -100,7 +100,7 @@ def run_pipeline() -> None:
 		VIDEO_PATH, 
 		all_results, 
 		object_map, 
-		top_k=3
+		top_k=100
 	)
 
 	results_timeline = mvc.find_event(track_clips, PROMPT, mvc_pp.clip_stride, TARGET_FPS, mvc_pp.clip_duration)
