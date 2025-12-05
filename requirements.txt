@@ -3,3 +3,4 @@ opencv-python
 numpy
 flask
 kornia
+numpy==1.26.4
