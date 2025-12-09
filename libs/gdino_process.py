@@ -105,7 +105,7 @@ class Model:
         caption: str,
         box_threshold: float,
         text_threshold: float,
-        ocsort_model: OCSort,
+        ocsort_model: OCSort | None,
         object_map:ObjectMap
     ) -> List[DetectionResult]:
         """
@@ -180,7 +180,7 @@ class Model:
             source_w: int,
             boxes: torch.Tensor,
             logits: torch.Tensor,
-            ocsort: OCSort,
+            ocsort: OCSort | None,
             phrase_class_idx:List
     ) -> sv.Detections:
         boxes = boxes * torch.Tensor([source_w, source_h, source_w, source_h])
@@ -191,13 +191,18 @@ class Model:
 
         out = np.column_stack([xyxy, confidence, phrase_class_idx])
 
-        oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
-        ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
+        outs = None
 
-        tracked_xyxy_pixel = oc_outputs[:, :4]
-        confidence = oc_outputs[:, 4]
-        class_ids = oc_outputs[:, 5].astype(int)
-        tracked_id = oc_outputs[:, 6].astype(int) 
+        if ocsort:
+            outs = ocsort.update(out, (source_h, source_w), (source_h, source_w)) # dont ask me why it's like this, legacy code babyyyyy.....
+            ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
+        else :
+            outs = np.column_stack([out, np.zeros((out.shape[0],))])
+
+        tracked_xyxy_pixel = outs[:, :4]
+        confidence = outs[:, 4]
+        class_ids = outs[:, 5].astype(int)
+        tracked_id = outs[:, 6].astype(int) 
 
         tracked_xyxy_norm = tracked_xyxy_pixel / np.array([source_w, source_h, source_w, source_h])
 
