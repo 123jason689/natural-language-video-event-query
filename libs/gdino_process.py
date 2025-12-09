@@ -443,11 +443,26 @@ def annotate_bgr(image_bgr: np.ndarray,
         tracker_id=detections.tracker_id
     )
 
-    labels = [
-        f"#{tracker_id} {phrases[class_id]}: {confidences:.2f}" 
-        for tracker_id, class_id, confidences 
-        in zip(detections.tracker_id, detections.class_id, detections.confidence)
-    ]
+    labels = []
+    for tracker_id in detections.tracker_id:
+        print(f"DEBUG: tracker_id={tracker_id}")
+    
+    for class_id in detections.class_id:
+        print(f"DEBUG: class_id={class_id}, phrases length={len(phrases)}")
+        if class_id is not None and class_id < len(phrases):
+            label = f"{phrases[class_id]}"
+    
+    for confidence in detections.confidence:
+        print(f"DEBUG: confidence={confidence}")
+    
+    for i in range(len(detections)):
+        tracker_id = detections.tracker_id[i] if detections.tracker_id is not None else None
+        class_id = detections.class_id[i] if detections.class_id is not None else None
+        confidence = detections.confidence[i] if detections.confidence is not None else None
+        
+        phrase = phrases[class_id] if class_id is not None and class_id < len(phrases) else "unknown"
+        label = f"#{tracker_id} {phrase}: {confidence:.2f}"
+        labels.append(label)
 
     bbox_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.INDEX)
     label_annotator = sv.LabelAnnotator(color_lookup=sv.ColorLookup.INDEX)
