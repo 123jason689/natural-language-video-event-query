@@ -444,16 +444,6 @@ def annotate_bgr(image_bgr: np.ndarray,
     )
 
     labels = []
-    for tracker_id in detections.tracker_id:
-        print(f"DEBUG: tracker_id={tracker_id}")
-    
-    for class_id in detections.class_id:
-        print(f"DEBUG: class_id={class_id}, phrases length={len(phrases)}")
-        if class_id is not None and class_id < len(phrases):
-            label = f"{phrases[class_id]}"
-    
-    for confidence in detections.confidence:
-        print(f"DEBUG: confidence={confidence}")
     
     for i in range(len(detections)):
         tracker_id = detections.tracker_id[i] if detections.tracker_id is not None else None
