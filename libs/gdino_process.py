@@ -389,7 +389,7 @@ def save_to_dir_anotated(
             last_res = res
 
         if last_res is not None:
-            annotated_frame = annotate_bgr(frame, last_res.detections, last_res.phrases)
+            annotated_frame = annotate_bgr(frame, last_res.detections.xyxy, last_res.detections.confidence, last_res.phrases)
 
         if writer is None:
             h, w = annotated_frame.shape[:2]
