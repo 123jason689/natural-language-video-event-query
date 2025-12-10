@@ -10,6 +10,8 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 #     echo "Model downloaded into $YOLO_PATH"
 # fi
 
+pip install -r requirements.txt --no-build-isolation
+
 export CUDA_HOME="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.3"
 echo $CUDA_HOME
 git clone https://github.com/IDEA-Research/GroundingDINO.git "$SCRIPT_DIR/models/dino/GroundingDINO/"
