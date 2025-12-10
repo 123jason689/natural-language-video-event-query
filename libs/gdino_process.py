@@ -173,6 +173,9 @@ class Model:
         boxes = boxes * torch.Tensor([source_w, source_h, source_w, source_h])
         xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
         confidence = logits.cpu().numpy()
+
+        print(f"Detected {boxes.shape[0]} objects")
+
         return sv.Detections(xyxy=xyxy, confidence=confidence)
 
 
