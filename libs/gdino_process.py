@@ -132,14 +132,14 @@ class Model:
         source_w = int(frame_batch.width)
 
         for i in range(processed_frames.shape[0]):
-            # with torch.autocast(device_type="cuda", dtype=torch.float16):
-            boxes, logits, phrases = predict(
-                model=self.model,
-                image=processed_frames[i],
-                caption=caption,
-                box_threshold=box_threshold,
-                text_threshold=text_threshold,
-                device=self.device)
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                boxes, logits, phrases = predict(
+                    model=self.model,
+                    image=processed_frames[i],
+                    caption=caption,
+                    box_threshold=box_threshold,
+                    text_threshold=text_threshold,
+                    device=self.device)
             detections = Model.post_process_result(
                 source_h=source_h,
                 source_w=source_w,
@@ -168,33 +168,36 @@ class Model:
             source_w: int,
             boxes: torch.Tensor,
             logits: torch.Tensor,
-            ocsort: OCSort
+            # ocsort: OCSort
     ) -> sv.Detections:
         boxes = boxes * torch.Tensor([source_w, source_h, source_w, source_h])
         xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
         confidence = logits.cpu().numpy()
-        phrase_class_idx = np.arange(xyxy.shape[0])
-        out = np.column_stack([xyxy, confidence, phrase_class_idx])
+        return sv.Detections(xyxy=xyxy, confidence=confidence)
 
-        oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w), 3) # dont ask me why it's like this, legacy code babyyyyy.....
-        ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
+
+        # phrase_class_idx = np.arange(xyxy.shape[0])
+        # out = np.column_stack([xyxy, confidence, phrase_class_idx])
+
+        # oc_outputs = ocsort.update(out, (source_h, source_w), (source_h, source_w), 3) # dont ask me why it's like this, legacy code babyyyyy.....
+        # ## oc sort outputs (x,y,x,y,score, phrase_class_idx, object_id)
         
-        if len(oc_outputs) == 0:
-            return sv.Detections.empty()
+        # if len(oc_outputs) == 0:
+        #     return sv.Detections.empty()
 
-        tracked_xyxy_pixel = oc_outputs[:, :4]
-        confidence = oc_outputs[:, 4]
-        class_ids = oc_outputs[:, 5].astype(int)
-        tracked_id = oc_outputs[:, 6].astype(int) 
+        # tracked_xyxy_pixel = oc_outputs[:, :4]
+        # confidence = oc_outputs[:, 4]
+        # class_ids = oc_outputs[:, 5].astype(int)
+        # tracked_id = oc_outputs[:, 6].astype(int) 
 
-        tracked_xyxy_norm = tracked_xyxy_pixel / np.array([source_w, source_h, source_w, source_h])
+        # tracked_xyxy_norm = tracked_xyxy_pixel / np.array([source_w, source_h, source_w, source_h])
 
-        return sv.Detections(
-            xyxy=tracked_xyxy_norm, 
-            confidence=confidence,
-            class_id=class_ids,
-            tracker_id=tracked_id
-        )
+        # return sv.Detections(
+        #     xyxy=tracked_xyxy_norm, 
+        #     confidence=confidence,
+        #     class_id=class_ids,
+        #     tracker_id=tracked_id
+        # )
 
     @staticmethod
     def phrases2classes(phrases: List[str], classes: List[str]) -> np.ndarray:
@@ -402,21 +405,45 @@ def save_to_dir_anotated(
     return out_path
 
 
-def _annotate_bgr(image_bgr: np.ndarray,
-                 boxes: np.ndarray,
-                 logits: np.ndarray,
-                 phrases: List[str],
-                 tracker_ids: np.ndarray) -> np.ndarray:
+# def annotate_bgr(image_bgr: np.ndarray,
+#                  boxes: np.ndarray,
+#                  logits: np.ndarray,
+#                  phrases: List[str],
+#                  tracker_ids: np.ndarray) -> np.ndarray:
+#     """
+#     Draw boxes/labels on a BGR image and return BGR.
+#     """
+#     # h, w, _ = image_bgr.shape
+
+#     # boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
+#     # xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+
+#     detections = sv.Detections(xyxy=boxes)
+#     labels = [f"{p} {t} {l:.2f}" for p, l, t in zip(phrases, logits, tracker_ids)]
+
+#     bbox_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.INDEX)
+#     label_annotator = sv.LabelAnnotator(color_lookup=sv.ColorLookup.INDEX)
+
+#     annotated = image_bgr.copy()
+#     annotated = bbox_annotator.annotate(scene=annotated, detections=detections)
+#     annotated = label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
+#     return annotated
+
+def annotate_bgr(image_bgr: np.ndarray,
+                 boxes: torch.Tensor,
+                 logits: torch.Tensor,
+                 phrases: List[str]) -> np.ndarray:
     """
     Draw boxes/labels on a BGR image and return BGR.
     """
-    # h, w, _ = image_bgr.shape
+    h, w, _ = image_bgr.shape
 
-    # boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
-    # xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+    # boxes are cx,cy,w,h normalized? you already scale by w,h in your code
+    boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
+    xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
 
-    detections = sv.Detections(xyxy=boxes)
-    labels = [f"{p} {t} {l:.2f}" for p, l, t in zip(phrases, logits, tracker_ids)]
+    detections = sv.Detections(xyxy=xyxy)
+    labels = [f"{p} {l:.2f}" for p, l in zip(phrases, logits)]
 
     bbox_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.INDEX)
     label_annotator = sv.LabelAnnotator(color_lookup=sv.ColorLookup.INDEX)
@@ -426,7 +453,7 @@ def _annotate_bgr(image_bgr: np.ndarray,
     annotated = label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
     return annotated
 
-def annotate_bgr(image_bgr: np.ndarray,
+def _annotate_bgr(image_bgr: np.ndarray,
                  detections: sv.Detections,
                  phrases: List[str]) -> np.ndarray:
     """

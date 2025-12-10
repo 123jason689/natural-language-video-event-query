@@ -40,7 +40,7 @@ def run_pipeline() -> None:
 
 
 	all_results = []
-	oc_sort = OCSort(0.3, 120, 3, 0.3)
+	# oc_sort = OCSort(0.3, 120, 3, 0.3)
 
 	print('Preprocessing frames and predicting / detecting objects specified')
 	for batch in video_stream:
@@ -62,7 +62,7 @@ def run_pipeline() -> None:
 			CLASSES[0],
 			BOX_THRESHOLD,
 			TEXT_THRESHOLD,
-			oc_sort
+			# oc_sort
 		)
 
 		all_results.extend(batch_results)
