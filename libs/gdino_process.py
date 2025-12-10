@@ -104,7 +104,7 @@ class Model:
         caption: str,
         box_threshold: float,
         text_threshold: float,
-        ocsort_model: OCSort
+        # ocsort_model: OCSort
     ) -> List[DetectionResult]:
         """
         import cv2
@@ -145,7 +145,7 @@ class Model:
                 source_w=source_w,
                 boxes=boxes,
                 logits=logits,
-                ocsort = ocsort_model
+                # ocsort = ocsort_model
             )
 
             results.append(
