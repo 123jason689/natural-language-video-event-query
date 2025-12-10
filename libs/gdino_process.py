@@ -132,14 +132,14 @@ class Model:
         source_w = int(frame_batch.width)
 
         for i in range(processed_frames.shape[0]):
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
-                boxes, logits, phrases = predict(
-                    model=self.model,
-                    image=processed_frames[i],
-                    caption=caption,
-                    box_threshold=box_threshold,
-                    text_threshold=text_threshold,
-                    device=self.device)
+            # with torch.autocast(device_type="cuda", dtype=torch.float16):
+            boxes, logits, phrases = predict(
+                model=self.model,
+                image=processed_frames[i],
+                caption=caption,
+                box_threshold=box_threshold,
+                text_threshold=text_threshold,
+                device=self.device)
             detections = Model.post_process_result(
                 source_h=source_h,
                 source_w=source_w,
