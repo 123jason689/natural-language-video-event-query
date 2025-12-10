@@ -446,10 +446,11 @@ def annotate_bgr(image_bgr: np.ndarray,
         boxes = torch.from_numpy(boxes)
     if isinstance(logits, np.ndarray):
         logits = torch.from_numpy(logits)
-    boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
-    xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
 
-    detections = sv.Detections(xyxy=xyxy)
+    # boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
+    # xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+
+    detections = sv.Detections(xyxy=boxes)
     labels = [f"{p} {l:.2f}" for p, l in zip(phrases, logits)]
 
     bbox_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.INDEX)
