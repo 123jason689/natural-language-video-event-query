@@ -439,6 +439,10 @@ def annotate_bgr(image_bgr: np.ndarray,
     h, w, _ = image_bgr.shape
 
     # boxes are cx,cy,w,h normalized? you already scale by w,h in your code
+    if isinstance(boxes, np.ndarray):
+        boxes = torch.from_numpy(boxes)
+    if isinstance(logits, np.ndarray):
+        logits = torch.from_numpy(logits)
     boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
     xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
 
