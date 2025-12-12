@@ -171,7 +171,7 @@ class Model:
             # ocsort: OCSort
     ) -> sv.Detections:
         boxes = boxes * torch.Tensor([source_w, source_h, source_w, source_h])
-        xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+        xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy")
         confidence = logits.cpu().numpy()
 
         print(f"Detected {boxes.shape[0]} objects")
@@ -433,19 +433,13 @@ def save_to_dir_anotated(
 #     return annotated
 
 def annotate_bgr(image_bgr: np.ndarray,
-                 boxes: torch.Tensor,
-                 logits: torch.Tensor,
+                 boxes,
+                 logits,
                  phrases: List[str]) -> np.ndarray:
     """
     Draw boxes/labels on a BGR image and return BGR.
     """
     h, w, _ = image_bgr.shape
-
-    # boxes are cx,cy,w,h normalized? you already scale by w,h in your code
-    if isinstance(boxes, torch.Tensor):
-        boxes = boxes.detach().cpu().numpy()
-    if isinstance(logits, torch.Tensor):
-        logits = logits.detach().cpu().numpy()
 
     # boxes_abs = boxes * torch.tensor([w, h, w, h], dtype=boxes.dtype)
     # xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()

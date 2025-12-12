@@ -72,8 +72,8 @@ class VidTensor(Iterator[FrameBatch]):
             float(target_fps), self._native_fps
         )
         self.total_frame = self._estimate_total_frames()
-        self.height = self._height
-        self.width = self._width
+        self.height = None
+        self.width = None
 
         self._interval_ms = 1000.0 / self.fps if self.fps > 0 else None
         self._next_keep_ms = 0.0
@@ -115,6 +115,10 @@ class VidTensor(Iterator[FrameBatch]):
             self.close()
             raise StopIteration
 
+        if not self.height:
+            self.height = frames[0].shape[0]
+        if not self.width:
+            self.width = frames[0].shape[1]
         thwc = torch.stack(frames, dim=0)
         batch = self._build_frame_batch(thwc, timestamps, kept_indices)
         self._last_batch = batch
