@@ -116,9 +116,10 @@ class VidTensor(Iterator[FrameBatch]):
             raise StopIteration
 
         if not self.height:
-            self.height = frames[0].shape[0]
+            self.height = frames[0].shape[1]
+            print(f"REVERSED FRAME FROM DIMENTION {frames[0].shape}")
         if not self.width:
-            self.width = frames[0].shape[1]
+            self.width = frames[0].shape[0]
         thwc = torch.stack(frames, dim=0)
         batch = self._build_frame_batch(thwc, timestamps, kept_indices)
         self._last_batch = batch
