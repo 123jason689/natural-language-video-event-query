@@ -28,7 +28,7 @@ setup(
         "decord",
         "opencv-python",
         # Optional dependencies found in the codebase:
-        "flash-attn",          # Uncomment if GPU supports it (required for InternVideo2)
+        # "flash-attn",          # Uncomment if GPU supports it (required for InternVideo2)
         # "deepspeed",           # Uncomment for distributed training
         "coremltools",         # Found in convert_model.py
         "onnx",                # Found in convert_model.py
