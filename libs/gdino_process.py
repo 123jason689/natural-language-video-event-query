@@ -283,8 +283,8 @@ def save_to_dir_anotated(
 
         if last_res is not None:
             # annotated_frame = annotate_bgr(frame, last_res.detections, object_map)
-            annotated_frame = old_annotate_bgr(frame, last_res.boxes_cxcywh, last_res.logits, last_res.phrases)
-            # annotated_frame = orig_annotate(frame, last_res.boxes_cxcywh, last_res.logits, last_res.phrases)
+            # annotated_frame = old_annotate_bgr(frame, last_res.boxes_cxcywh, last_res.logits, last_res.phrases)
+            annotated_frame = orig_annotate(frame, last_res.boxes_cxcywh, last_res.logits, last_res.phrases)
 
         if writer is None:
             h, w = annotated_frame.shape[:2]
