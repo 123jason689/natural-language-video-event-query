@@ -25,6 +25,8 @@ BATCH_SIZE = 16
 TARGET_FPS = 6
 SAVE_ANNOTATED = True
 ANNOTATION_DIR = "./history"
+CLIP_BATCH_SIZE = 8
+TEMP_CLIPS_DIR = "./temp_clips"
 
 GDINO_CONFIG = "./models/dino/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
 GDINO_BASE_CKPT = "./models/dino/GroundingDINO/weights/groundingdino_swint_ogc.pth"
@@ -51,7 +53,7 @@ def run_pipeline() -> None:
 	)
 
 	mvc_pp = MobileViClipPreprocessor(
-        target_size=256, # MobileViCLIP small pre-trained weigths uses 256
+        target_size=256,
         clip_length=8, 
 		clip_duration=4.0,
         clip_stride=4,
@@ -76,9 +78,6 @@ def run_pipeline() -> None:
 	for batch in video_stream:
 		curr_time = time.perf_counter()
 		processed = load_frame_formated(batch, save_history_dir=None)
-		end_time = time.perf_counter()
-		print(f"Took {(end_time - curr_time):.4f} seconds to complete Enhancement")
-		curr_time = time.perf_counter()		
 		
 		batch_results = gdino.predict_with_caption(
 			processed,
@@ -91,7 +90,7 @@ def run_pipeline() -> None:
 
 		all_results.extend(batch_results)
 		end_time = time.perf_counter()
-		print(f"Took {(end_time - curr_time):.4f} seconds to complete GDINO Detection")
+		print(f"Processed batch {batch.batch_id} | Time: {(end_time - curr_time):.4f}s")
 
 	video_stream.close()
 
@@ -100,10 +99,11 @@ def run_pipeline() -> None:
 		VIDEO_PATH, 
 		all_results, 
 		object_map, 
-		top_k=100
+		top_k=5,
+		temp_dir=TEMP_CLIPS_DIR
 	)
 
-	results_timeline = mvc.find_event(track_clips, PROMPT, mvc_pp.clip_stride, TARGET_FPS, mvc_pp.clip_duration)
+	results_timeline = mvc.find_event(track_clips, PROMPT, mvc_pp.clip_stride, TARGET_FPS, mvc_pp.clip_duration, CLIP_BATCH_SIZE)
 
 	print(f"\nRaw matching clips found: {len(results_timeline)}")
 

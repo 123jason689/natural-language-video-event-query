@@ -1,6 +1,8 @@
 import cv2
 import torch
 import numpy as np
+import os
+import shutil
 from typing import List, Dict, Tuple, Optional, Union
 from collections import defaultdict, deque
 
@@ -12,11 +14,6 @@ class MobileViClipPreprocessor:
     """
     Preprocessing pipeline to convert GDINO+OC-SORT DetectionResults into 
     MobileViCLIP-ready tensor clips.
-    
-    Key Features:
-    - Temporal Resampling: Selects 8 frames evenly distributed over a fixed duration (e.g., 3s)
-      regardless of the input detection FPS.
-    - Context-aware Cropping: Focuses on the person/action.
     """
 
     def __init__(
@@ -28,16 +25,6 @@ class MobileViClipPreprocessor:
         clip_stride: int = 4,        # Sliding window stride (in processed frames)
         person_keywords: List[str] = None
     ):
-        """
-        Args:
-            target_size: The H/W resolution for MobileViCLIP (default 224).
-            context_padding: Percentage to expand the box to capture context (default 20%).
-            clip_length: Number of frames the model expects (T). Fixed at 8 for MobileViCLIP.
-            clip_duration: The temporal span (in seconds) the 8 frames should cover.
-                           MobileViCLIP prefers 2-10s. Default 3.0s.
-            clip_stride: Step size for sliding window (how many frames to move forward).
-            person_keywords: List of words to identify a person class.
-        """
         self.target_size = target_size
         self.context_padding = context_padding
         self.clip_length = clip_length
@@ -50,11 +37,18 @@ class MobileViClipPreprocessor:
         video_path: str, 
         detection_results: List[DetectionResult], 
         object_map: ObjectMap,
-        top_k: int = 1
-    ) -> Dict[int, List[torch.Tensor]]:
+        top_k: int = 1,
+        temp_dir: str = "temp_clips"
+    ) -> Dict[int, List[str]]:
         """
-        Main entry point. Returns a dictionary mapping Tracker ID -> List of Clip Tensors.
+        Main entry point. 
+        Returns a dictionary mapping Tracker ID -> List of file paths to saved .pt tensors.
         """
+        # Ensure temp directory exists
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        os.makedirs(temp_dir, exist_ok=True)
+
         # 1. Index and Filter Tracks
         print(f"Indexing {len(detection_results)} frames of detection results...")
         track_metadata = self._analyze_tracks(detection_results, object_map)
@@ -93,18 +87,32 @@ class MobileViClipPreprocessor:
         
         cap.release()
 
-        # 4. Temporal Windowing (Create Clips with Resampling)
+        # 4. Temporal Windowing (Create Clips -> Save to Disk)
         final_output = {}
         for tid, buffer_data in track_buffers.items():
             clips = self._create_temporal_clips(buffer_data)
+            
             if clips:
-                final_output[tid] = clips
-                print(f"Track ID {tid}: Generated {len(clips)} clips spanning {self.clip_duration}s each.")
+                # Save clips to disk to save RAM
+                track_dir = os.path.join(temp_dir, str(tid))
+                os.makedirs(track_dir, exist_ok=True)
+                
+                saved_paths = []
+                for idx, clip_tensor in enumerate(clips):
+                    save_path = os.path.join(track_dir, f"clip_{idx:05d}.pt")
+                    torch.save(clip_tensor, save_path)
+                    saved_paths.append(save_path)
+                
+                final_output[tid] = saved_paths
+                print(f"Track ID {tid}: Saved {len(clips)} clips to {track_dir}")
+                
+                # Clear memory immediately
+                del clips
+                del buffer_data
         
         return final_output
 
     def _analyze_tracks(self, results: List[DetectionResult], object_map: ObjectMap) -> Dict:
-        # ... (Same as before) ...
         tracks = defaultdict(lambda: {'scores': [], 'class_ids': set()})
 
         for res in results:
@@ -144,9 +152,6 @@ class MobileViClipPreprocessor:
         buffers: Dict[int, List],
         timestamp: float
     ):
-        """
-        Extracts crops and stores them with timestamps.
-        """
         if result.detections is None: return
 
         img_h, img_w = full_frame.shape[:2]
@@ -159,11 +164,9 @@ class MobileViClipPreprocessor:
             if tid in target_ids:
                 box_norm = result.detections.xyxy[i]
                 crop_tensor = self._extract_square_crop(frame_rgb, box_norm, img_w, img_h)
-                # Store Tuple: (timestamp, tensor)
                 buffers[tid].append((timestamp, crop_tensor))
 
     def _extract_square_crop(self, frame: np.ndarray, box_norm: np.ndarray, img_w: int, img_h: int) -> torch.Tensor:
-        # ... (Same cropping logic as before) ...
         x1, y1, x2, y2 = box_norm * np.array([img_w, img_h, img_w, img_h])
         w = x2 - x1
         h = y2 - y1
@@ -197,55 +200,27 @@ class MobileViClipPreprocessor:
         return tensor
 
     def _create_temporal_clips(self, buffer_data: List[Tuple[float, torch.Tensor]]) -> List[torch.Tensor]:
-        """
-        Resamples the buffer to create fixed-size clips (8 frames) that span 
-        approximately `self.clip_duration`.
-        
-        Args:
-            buffer_data: List of (timestamp, tensor) tuples sorted by time.
-        """
         if len(buffer_data) < self.clip_length:
             return []
 
         clips = []
-        
-        # buffer_data is a list of frames for a SINGLE track.
-        # We iterate through valid start points.
-        
-        # Pre-calculate timestamps array for faster lookup
         timestamps = np.array([x[0] for x in buffer_data])
         
-        # Iterate over the buffer
         for start_idx in range(0, len(buffer_data), self.clip_stride):
             start_time = timestamps[start_idx]
             target_end_time = start_time + self.clip_duration
             
-            # Find the index in the buffer closest to target_end_time
-            # We search only after start_idx to ensure forward progress
-            # searchsorted returns the index where target_end_time should be inserted
             end_search = np.searchsorted(timestamps, target_end_time)
-            
-            # Adjust end_search to be a valid index
             end_idx = min(end_search, len(buffer_data) - 1)
             
-            # Safety check: Is the actual duration reasonably close to target?
-            # e.g., if track ends abruptly, we might not have enough footage.
             actual_duration = timestamps[end_idx] - start_time
-            
-            # If the available window is too short (e.g., < 50% of target), skip
             if actual_duration < (self.clip_duration * 0.5):
                 continue
 
-            # Define the window of indices available
             window_indices = np.arange(start_idx, end_idx + 1)
-            
             if len(window_indices) < self.clip_length:
-                # Not enough frames even to fill the required 8 frames
-                # We can either skip or duplicate. Skipping is safer for retrieval precision.
                 continue
 
-            # Uniformly sample 8 indices from this window
-            # linspace generates evenly spaced numbers
             sampled_indices = np.linspace(
                 start_idx, 
                 end_idx, 
@@ -253,12 +228,8 @@ class MobileViClipPreprocessor:
                 dtype=int
             )
             
-            # Gather the tensors
             clip_frames = [buffer_data[i][1] for i in sampled_indices]
-            
-            # Stack: list of (C, H, W) -> (T, C, H, W)
             clip_tensor = torch.stack(clip_frames, dim=0)
-            
             clips.append(clip_tensor)
             
         return clips
