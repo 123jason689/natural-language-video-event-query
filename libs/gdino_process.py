@@ -207,19 +207,19 @@ class Model:
         tracked_id = outs[:, 6].astype(int) 
 
 
-        tracked_cxcywh = box_convert(boxes=torch.from_numpy(tracked_xyxy_pixel), in_fmt="xyxy", out_fmt="cxcywh")
-        tracked_cxcywh_norm = tracked_cxcywh / np.array([source_w, source_h, source_w, source_h])
+        # tracked_cxcywh = box_convert(boxes=torch.from_numpy(tracked_xyxy_pixel), in_fmt="xyxy", out_fmt="cxcywh")
+        # tracked_cxcywh_norm = tracked_cxcywh / np.array([source_w, source_h, source_w, source_h])
 
-        print(f"Length of tracked objects = {tracked_id.shape[0]}")
-
-        assert tracked_cxcywh_norm.shape[0] == class_ids.shape[0] == confidence.shape[0] == tracked_id.shape[0], "OC Sort output wrong shape or not consistent or NoneType"
-
-        tracked = tracked_cxcywh_norm
-
-        # tracked_xyxy_norm = tracked_xyxy_pixel / np.array([source_w, source_h, source_w, source_h])
         # print(f"Length of tracked objects = {tracked_id.shape[0]}")
-        # assert tracked_xyxy_norm.shape[0] == class_ids.shape[0] == confidence.shape[0] == tracked_id.shape[0], "OC Sort output wrong shape or not consistent or NoneType"
-        # tracked = tracked_xyxy_norm
+
+        # assert tracked_cxcywh_norm.shape[0] == class_ids.shape[0] == confidence.shape[0] == tracked_id.shape[0], "OC Sort output wrong shape or not consistent or NoneType"
+
+        # tracked = tracked_cxcywh_norm
+
+        tracked_xyxy_norm = tracked_xyxy_pixel / np.array([source_w, source_h, source_w, source_h])
+        print(f"Length of tracked objects = {tracked_id.shape[0]}")
+        assert tracked_xyxy_norm.shape[0] == class_ids.shape[0] == confidence.shape[0] == tracked_id.shape[0], "OC Sort output wrong shape or not consistent or NoneType"
+        tracked = tracked_xyxy_norm
 
         return sv.Detections(
             xyxy=tracked, 
