@@ -93,6 +93,7 @@ class Model:
                     timestamp_ms=float(frame_batch.timestamps_ms[i].item()),
                     detections=detections,
                     phrases=phrases,
+                    ## boxes_cxcywh
                     boxes_cxcywh=boxes.cpu(),
                     logits=logits.cpu(),
                 )
