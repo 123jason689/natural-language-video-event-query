@@ -185,6 +185,7 @@ class VidTensor(Iterator[FrameBatch]):
         tensor = tensor.to(self.device, dtype=self._batch_dtype, non_blocking=self.device.type != "cpu")
         timestamps_tensor = torch.tensor(timestamps, dtype=torch.float64)
         indices_tensor = torch.tensor(kept_indices, dtype=torch.long)
+        print(f"Loaded a batch of frames ({tensor.shape[2]} x {tensor.shape[3]})")
         return FrameBatch(
             frames=tensor,
             timestamps_ms=timestamps_tensor,

@@ -94,6 +94,16 @@ def run_pipeline() -> None:
 
 	video_stream.close()
 
+	if SAVE_ANNOTATED:
+		print('Saving processed frames')
+		curr_time = time.perf_counter()
+		save_path = save_to_dir_anotated(video_stream.file_path, all_results, object_map, ANNOTATION_DIR)
+		if save_path:
+			print(f"Annotated video saved to {save_path}")
+		end_time = time.perf_counter()
+		print(f"Took {(end_time - curr_time):.4f} seconds to complete Annotation and Saving")
+
+
 	print("Preprocess all results for MobileViCLIP")
 	track_clips = mvc_pp.run(
 		VIDEO_PATH, 
@@ -114,16 +124,6 @@ def run_pipeline() -> None:
 	for i, res in enumerate(final_events[:5]):
 		duration = res['end'] - res['start']
 		print(f"{i+1}. Track {res['track_id']} | {res['start']:.1f}s - {res['end']:.1f}s ({duration:.1f}s) | Conf: {res['score']:.3f}")
-
-	print('Saving processed frames')
-	if SAVE_ANNOTATED:
-		curr_time = time.perf_counter()
-		save_path = save_to_dir_anotated(video_stream.file_path, all_results, object_map, ANNOTATION_DIR)
-		if save_path:
-			print(f"Annotated video saved to {save_path}")
-		end_time = time.perf_counter()
-		print(f"Took {(end_time - curr_time):.4f} seconds to complete Annotation and Saving")
-
 
 if __name__ == "__main__":
 	run_pipeline()

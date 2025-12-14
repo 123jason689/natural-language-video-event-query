@@ -20,8 +20,8 @@ class DetectionResult:
     timestamp_ms: float
     detections: sv.Detections
     phrases: List[str]
-    # boxes_cxcywh: torch.Tensor
-    # logits: torch.Tensor
+    boxes_cxcywh: torch.Tensor
+    logits: torch.Tensor
 
 class Model:
 
@@ -168,6 +168,8 @@ class Model:
                     timestamp_ms=float(frame_batch.timestamps_ms[i].item()),
                     detections=detections,
                     phrases=phrases,
+                    cxcyhw = boxes.cpu(),
+                    logits = logits.cpu()
                 )
             )
 
@@ -204,14 +206,23 @@ class Model:
         class_ids = outs[:, 5].astype(int)
         tracked_id = outs[:, 6].astype(int) 
 
-        tracked_xyxy_norm = tracked_xyxy_pixel / np.array([source_w, source_h, source_w, source_h])
+
+        tracked_cxcywh = box_convert(boxes=torch.from_numpy(tracked_xyxy_pixel), in_fmt="xyxy", out_fmt="cxcywh")
+        tracked_cxcywh_norm = tracked_cxcywh / np.array([source_w, source_h, source_w, source_h])
 
         print(f"Length of tracked objects = {tracked_id.shape[0]}")
 
-        assert tracked_xyxy_norm.shape[0] == class_ids.shape[0] == confidence.shape[0] == tracked_id.shape[0], "OC Sort output wrong shape or not consistent or NoneType"
-        
+        assert tracked_cxcywh_norm.shape[0] == class_ids.shape[0] == confidence.shape[0] == tracked_id.shape[0], "OC Sort output wrong shape or not consistent or NoneType"
+
+        tracked = tracked_cxcywh_norm
+
+        # tracked_xyxy_norm = tracked_xyxy_pixel / np.array([source_w, source_h, source_w, source_h])
+        # print(f"Length of tracked objects = {tracked_id.shape[0]}")
+        # assert tracked_xyxy_norm.shape[0] == class_ids.shape[0] == confidence.shape[0] == tracked_id.shape[0], "OC Sort output wrong shape or not consistent or NoneType"
+        # tracked = tracked_xyxy_norm
+
         return sv.Detections(
-            xyxy=tracked_xyxy_norm, 
+            xyxy=tracked, 
             confidence=confidence,
             class_id=class_ids,
             tracker_id=tracked_id
@@ -271,7 +282,9 @@ def save_to_dir_anotated(
             last_res = res
 
         if last_res is not None:
-            annotated_frame = annotate_bgr(frame, last_res.detections, object_map)
+            # annotated_frame = annotate_bgr(frame, last_res.detections, object_map)
+            annotated_frame = old_annotate_bgr(frame, last_res.boxes_cxcywh, last_res.logits, last_res.phrases)
+            # annotated_frame = orig_annotate(frame, last_res.boxes_cxcywh, last_res.logits, last_res.phrases)
 
         if writer is None:
             h, w = annotated_frame.shape[:2]
@@ -317,6 +330,61 @@ def annotate_bgr(image_bgr: np.ndarray,
     annotated = label_annotator.annotate(scene=annotated, detections=drawing_detections, labels=labels)
     
     return annotated
+
+def old_annotate_bgr(image_bgr: np.ndarray,
+                 boxes: torch.Tensor,
+                 logits: torch.Tensor,
+                 phrases: List[str]) -> np.ndarray:
+    """
+    Draw boxes/labels on a BGR image and return BGR.
+    """
+    h, w, _ = image_bgr.shape
+
+    # boxes are cx,cy,w,h normalized? you already scale by w,h in your code
+    boxes_abs = boxes * torch.tensor([w, h, w, h])
+    xyxy = box_convert(boxes=boxes_abs, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+
+    detections = sv.Detections(xyxy=xyxy)
+    labels = [f"{p} {l:.2f}" for p, l in zip(phrases, logits)]
+
+    bbox_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.INDEX)
+    label_annotator = sv.LabelAnnotator(color_lookup=sv.ColorLookup.INDEX)
+
+    annotated = image_bgr.copy()
+    annotated = bbox_annotator.annotate(scene=annotated, detections=detections)
+    annotated = label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
+    return annotated
+
+def orig_annotate(image_source: np.ndarray, boxes: torch.Tensor, logits: torch.Tensor, phrases: List[str]) -> np.ndarray:
+    """    
+    This function annotates an image with bounding boxes and labels.
+
+    Parameters:
+    image_source (np.ndarray): The source image to be annotated.
+    boxes (torch.Tensor): A tensor containing bounding box coordinates.
+    logits (torch.Tensor): A tensor containing confidence scores for each bounding box.
+    phrases (List[str]): A list of labels for each bounding box.
+
+    Returns:
+    np.ndarray: The annotated image.
+    """
+    h, w, _ = image_source.shape
+    boxes = boxes * torch.Tensor([w, h, w, h])
+    xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+    detections = sv.Detections(xyxy=xyxy)
+
+    labels = [
+        f"{phrase} {logit:.2f}"
+        for phrase, logit
+        in zip(phrases, logits)
+    ]
+
+    bbox_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.INDEX)
+    label_annotator = sv.LabelAnnotator(color_lookup=sv.ColorLookup.INDEX)
+    annotated_frame = cv2.cvtColor(image_source, cv2.COLOR_RGB2BGR)
+    annotated_frame = bbox_annotator.annotate(scene=annotated_frame, detections=detections)
+    annotated_frame = label_annotator.annotate(scene=annotated_frame, detections=detections, labels=labels)
+    return annotated_frame
 
 def unnormbbox(bbox, w, h):
     return bbox * np.array([w, h, w, h])
